@@ -1,6 +1,6 @@
 # mSwarm
 
-**Antigravity-style multi-agent orchestration for OpenCode 2.x — with first-class Swarm mode.**
+**Antigravity-style multi-agent orchestration for OpenCode 2.x - with first-class Swarm mode.**
 
 mSwarm turns OpenCode into a coordinator plus a team of specialized worker sessions. It adds a persistent shared
 message board, targeted wakeups, git worktree isolation, and an event-driven wait mechanism with zero polling.
@@ -11,19 +11,19 @@ message board, targeted wakeups, git worktree isolation, and an event-driven wai
 
 ## Highlights
 
-- **Swarm mode built into the mode switcher** — after installation, press **Shift+Tab** until the **swarm** agent
+- **Swarm mode built into the mode switcher** - after installation, press **Shift+Tab** until the **swarm** agent
   appears, then describe the goal. No slash command required. `/mswarm <goal>` also works from Build or Plan.
-- **Selected-model inheritance** — workers inherit the model selected for the session unless a per-worker or
+- **Selected-model inheritance** - workers inherit the model selected for the session unless a per-worker or
   per-swarm model is chosen.
-- **Zero-polling `swarm_wait`** — workers park without burning tokens, then wake through OpenCode's
+- **Zero-polling `swarm_wait`** - workers park without burning tokens, then wake through OpenCode's
   `session.execution.succeeded` event and `session.prompt`.
-- **Targeted addressing** — `@name`, `@prefix` for numbered groups, `@all`, and `@#channel` for channel subscribers.
-- **Channels** — create, join, leave, list, and archive parallel workstreams.
-- **Workspace isolation** — `inherit`, `share` (detached worktree), or `branch` (`mswarm/<swarm>/<member>` worktree).
-- **Sharding and forks** — `n` copies, per-slice `tasks`, and parent-linked `fork` sessions.
-- **Durable board** — append-only messages, members, channels, and state persisted atomically under
+- **Targeted addressing** - `@name`, `@prefix` for numbered groups, `@all`, and `@#channel` for channel subscribers.
+- **Channels** - create, join, leave, list, and archive parallel workstreams.
+- **Workspace isolation** - `inherit`, `share` (detached worktree), or `branch` (`mswarm/<swarm>/<member>` worktree).
+- **Sharding and forks** - `n` copies, per-slice `tasks`, and parent-linked `fork` sessions.
+- **Durable board** - append-only messages, members, channels, and state persisted atomically under
   `.opencode/mswarm/swarms/<swarmId>.json`.
-- **OpenCode 2.x native** — implemented with `@opencode/plugin` `Plugin.define`, `ctx.tool.transform`,
+- **OpenCode 2.x native** - implemented with `@opencode/plugin` `Plugin.define`, `ctx.tool.transform`,
   `ctx.command.transform`, session hooks, and the public event stream.
 
 ---
@@ -127,9 +127,9 @@ OpenCode watches configuration and plugin changes; use `/reload` if a rebuild is
 
 ### Slash commands
 
-- `/mswarm <goal>` — initialize a swarm in the current session and start coordinating.
-- `/mswarm board` — show members, states, channels, and recent board messages.
-- `/mswarm kill` — abort and clean up active workers in the current swarm.
+- `/mswarm <goal>` - initialize a swarm in the current session and start coordinating.
+- `/mswarm board` - show members, states, channels, and recent board messages.
+- `/mswarm kill` - abort and clean up active workers in the current swarm.
 
 ### Switching models
 

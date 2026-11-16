@@ -1299,7 +1299,7 @@ export class SwarmStore {
         ? ` | error: ${member.lastError.slice(0, 120)}`
         : "";
       lines.push(
-        `- **${member.name}** [${member.role}] — \`${member.state}\`${waitInfo} | model: \`${modelStr}\` | workspace: \`${member.workspace}\` | channels: ${channelsStr}${errorInfo}`,
+        `- **${member.name}** [${member.role}] - \`${member.state}\`${waitInfo} | model: \`${modelStr}\` | workspace: \`${member.workspace}\` | channels: ${channelsStr}${errorInfo}`,
       );
       if (member.brief) {
         lines.push(
