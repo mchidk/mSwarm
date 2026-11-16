@@ -120,13 +120,18 @@ spawning.
 npm install
 npm run build
 node dist/cli.js install --project --local
+# or make this checkout available in every OpenCode project:
+node dist/cli.js install --global --local
 ```
 
-`--local` writes this checkout's absolute path into `plugins` instead of the npm package name. You can also pass an
-explicit path:
+`--local` writes this checkout's absolute path into `plugins` instead of the npm package name. `--global` writes to
+`~/.config/opencode/opencode.json(c)` and registers the `swarm` agent for every project. Use one or the other: if the
+plugin is already global, remove a project-local `opencode.json` to avoid loading the same plugin twice.
+
+You can also pass an explicit path:
 
 ```bash
-node dist/cli.js install --project --local C:/path/to/mSwarm
+node dist/cli.js install --global --local C:/path/to/mSwarm
 ```
 
 Or configure it manually:

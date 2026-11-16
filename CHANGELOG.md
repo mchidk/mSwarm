@@ -41,6 +41,8 @@ All notable changes to mSwarm.
 
 - Writes the OpenCode 2.x `plugins` key and migrates a legacy `plugin` array.
 - Adds `--local [path]` so a checkout can be installed before the package is published.
+- Supports `--global --local` so one checkout and its `swarm` agent are available in every project; avoid keeping a
+  duplicate project-local config when the global install is active.
 - Adds the `swarm` primary agent, preserves unrelated JSONC comments, and finds project configuration from nested
   directories.
 
