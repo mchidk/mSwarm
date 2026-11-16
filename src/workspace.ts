@@ -151,6 +151,22 @@ export class WorkspaceManager {
     }
   }
 
+  private pruneEmptyParents(workspacePath: string, stopAt: string): void {
+    const stop = path.resolve(stopAt);
+    let current = path.dirname(path.resolve(workspacePath));
+    while (current !== stop && current.startsWith(stop + path.sep)) {
+      try {
+        if (fs.readdirSync(current).length > 0) {
+          return;
+        }
+        fs.rmdirSync(current);
+      } catch {
+        return;
+      }
+      current = path.dirname(current);
+    }
+  }
+
   private async removeWorktree(
     rootDir: string,
     workspacePath: string,
@@ -189,6 +205,7 @@ export class WorkspaceManager {
       resolvedWorktree.startsWith(expectedPrefix + path.sep)
     ) {
       await this.removeWorktree(rootDir, workspacePath);
+      this.pruneEmptyParents(workspacePath, expectedPrefix);
     }
 
     if (branchName && branchName.startsWith("mswarm/") && options.deleteBranch) {

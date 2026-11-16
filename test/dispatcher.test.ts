@@ -193,6 +193,54 @@ describe("SwarmDispatcher", () => {
     assert.match(lastPrompt?.text ?? "", /retry/);
   });
 
+  it("uses the furthest read/wait watermark when delivering a completed turn", async () => {
+    const swarm = store.createOrGetSwarm("coord-1", tmpDir, MODEL);
+    const [worker] = (
+      await dispatcher.addWorkers("coord-1", {
+        name: "alice",
+        brief: "Review",
+      })
+    ).created;
+    assert.ok(worker);
+
+    // Simulate a model that parked at seq 1 but then read seq 2 in the same
+    // turn without clearing waitingSinceSeq.
+    store.updateMember(swarm.swarmId, "alice", {
+      state: "working",
+      waitingSinceSeq: 1,
+      lastReadSeq: 1,
+    });
+    store.postMessage(swarm.swarmId, "coordinator", "@alice message two");
+    store.readBoard(swarm.swarmId, "alice", { since: 1 });
+    assert.equal(store.getMember(swarm.swarmId, "alice")?.lastReadSeq, 2);
+    store.postMessage(swarm.swarmId, "coordinator", "@alice message three");
+
+    await dispatcher.handleSessionIdle(worker.sessionID);
+    const prompt = runtime.prompts[runtime.prompts.length - 1]?.text ?? "";
+    assert.match(prompt, /message three/);
+    assert.doesNotMatch(prompt, /message two/);
+
+    const [bob] = (
+      await dispatcher.addWorkers("coord-1", {
+        name: "bob",
+        brief: "Read",
+      })
+    ).created;
+    assert.ok(bob);
+    const head = store.getSwarm(swarm.swarmId)?.headSeq ?? 0;
+    store.updateMember(swarm.swarmId, "bob", {
+      state: "working",
+      waitingSinceSeq: 1,
+      lastReadSeq: head,
+    });
+    await dispatcher.handleSessionIdle(bob.sessionID);
+    assert.equal(
+      store.getMember(swarm.swarmId, "bob")?.waitingSinceSeq,
+      head,
+      "the park watermark must not regress",
+    );
+  });
+
   it("returns unread messages without parking and marks the member working", async () => {
     const swarm = store.createOrGetSwarm("coord-1", tmpDir, MODEL);
     const [worker] = (

@@ -51,6 +51,12 @@ describe("WorkspaceManager", () => {
 
     await manager.cleanupWorkspace(tmpDir, share.workspacePath, share.branchName);
     assert.equal(fs.existsSync(share.workspacePath), false);
+    assert.equal(
+      fs.existsSync(
+        path.join(tmpDir, ".opencode", "mswarm", "worktrees", "sw1"),
+      ),
+      false,
+    );
 
     const branch = await manager.prepareWorkspace(tmpDir, "sw1", "brancher", "branch");
     assert.notEqual(branch.workspacePath, tmpDir);
@@ -72,6 +78,12 @@ describe("WorkspaceManager", () => {
     await manager.cleanupWorkspace(tmpDir, reused.workspacePath, reused.branchName, {
       deleteBranch: true,
     });
+    assert.equal(
+      fs.existsSync(
+        path.join(tmpDir, ".opencode", "mswarm", "worktrees", "sw1"),
+      ),
+      false,
+    );
 
     await manager.cleanupWorkspace(tmpDir, branch.workspacePath, branch.branchName, {
       deleteBranch: true,

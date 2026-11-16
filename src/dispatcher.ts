@@ -685,26 +685,29 @@ export class SwarmDispatcher {
 
     const woken: string[] = [];
     for (const recipient of result.recipientsToWake) {
-      if (recipient.state !== "waiting" && recipient.state !== "stopped") {
+      // Re-read the member: another instance may have advanced its watermark
+      // or resumed it between the post and the wake attempt.
+      const current = freshSwarm.members[recipient.name] ?? recipient;
+      if (current.state !== "waiting" && current.state !== "stopped") {
         continue;
       }
       const unread = this.store.getMatchingMessages(
         freshSwarm,
-        recipient,
-        recipient.lastReadSeq ?? 0,
-        recipient.wakeMode !== "all",
+        current,
+        Math.max(current.lastReadSeq ?? 0, current.waitingSinceSeq ?? 0),
+        current.wakeMode !== "all",
       );
       const { batch, remaining } = takeBatch(
         unread.length > 0 ? unread : [result.message],
       );
       const didWake = await this.wakeMember(
         freshSwarm,
-        recipient,
+        current,
         batch,
         remaining,
       );
       if (didWake) {
-        woken.push(recipient.name);
+        woken.push(current.name);
       }
     }
 
@@ -806,7 +809,10 @@ export class SwarmDispatcher {
       return;
     }
 
-    const since = member.waitingSinceSeq ?? member.lastReadSeq ?? 0;
+    const since = Math.max(
+      member.waitingSinceSeq ?? 0,
+      member.lastReadSeq ?? 0,
+    );
     const mentionsOnly = member.wakeMode !== "all";
     const unread = this.store.getMatchingMessages(
       swarm,
@@ -823,7 +829,11 @@ export class SwarmDispatcher {
 
     this.store.updateMember(swarm.swarmId, member.name, {
       state: "waiting",
-      waitingSinceSeq: member.waitingSinceSeq ?? swarm.headSeq,
+      waitingSinceSeq: Math.max(
+        member.waitingSinceSeq ?? 0,
+        member.lastReadSeq ?? 0,
+        swarm.headSeq,
+      ),
     });
   }
 
@@ -930,19 +940,23 @@ export class SwarmDispatcher {
     messages: BoardMessage[],
     remaining: number = 0,
   ): Promise<boolean> {
+    const latest = this.store.getMember(swarm.swarmId, member.name) ?? member;
+    if (latest.state === "killed") {
+      return false;
+    }
     const lastSeq = messages[messages.length - 1]?.seq ?? swarm.headSeq;
 
     // Mark working before prompting so concurrent posts do not double-wake.
-    this.store.updateMember(swarm.swarmId, member.name, {
+    this.store.updateMember(swarm.swarmId, latest.name, {
       state: "working",
       waitingSinceSeq: undefined,
     });
 
     const model =
-      member.model ??
+      latest.model ??
       swarm.selectedModel ??
-      (await this.resolveSelectedModel(member.sessionID));
-    const basePrompt = buildWakeupPrompt(member, messages);
+      (await this.resolveSelectedModel(latest.sessionID));
+    const basePrompt = buildWakeupPrompt(latest, messages);
     const promptText =
       remaining > 0
         ? `${basePrompt}\n\n[${remaining} more unread board message(s) are waiting. Finish this batch, then read or wait again.]`
@@ -950,27 +964,36 @@ export class SwarmDispatcher {
 
     try {
       await this.runtime.promptSession({
-        sessionID: member.sessionID,
+        sessionID: latest.sessionID,
         text: promptText,
         delivery: "queue",
       });
+      const current =
+        this.store.getMember(swarm.swarmId, latest.name) ?? latest;
+      if (current.state === "killed") {
+        return true;
+      }
       // Only advance the read watermark after the wake was accepted, so a
       // failed delivery can be retried by a later post.
-      this.store.updateMember(swarm.swarmId, member.name, {
+      this.store.updateMember(swarm.swarmId, latest.name, {
         state: "working",
         waitingSinceSeq: undefined,
-        lastReadSeq: Math.max(member.lastReadSeq ?? 0, lastSeq),
+        lastReadSeq: Math.max(current.lastReadSeq ?? 0, lastSeq),
         lastError: undefined,
-        ...(model && !member.model ? { model } : {}),
+        ...(model && !current.model ? { model } : {}),
       });
       return true;
     } catch (error) {
-      this.store.updateMember(swarm.swarmId, member.name, {
-        state: "stopped",
-        lastError: `Wake failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      });
+      const current =
+        this.store.getMember(swarm.swarmId, latest.name) ?? latest;
+      if (current.state !== "killed") {
+        this.store.updateMember(swarm.swarmId, latest.name, {
+          state: "stopped",
+          lastError: `Wake failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        });
+      }
       return false;
     }
   }

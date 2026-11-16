@@ -168,6 +168,31 @@ describe("SwarmStore", () => {
     assert.ok((storeA.getSwarm(swarm.swarmId)?.revision ?? 0) >= 2);
   });
 
+  it("refreshes getMember and listSwarms from disk", () => {
+    const reader = new SwarmStore(tmpDir);
+    const writer = new SwarmStore(tmpDir);
+    const swarm = writer.createOrGetSwarm("coord-refresh", tmpDir);
+    writer.addMember(swarm.swarmId, {
+      name: "bob",
+      role: "worker",
+      state: "waiting",
+      sessionID: "sess-bob",
+      workspace: "inherit",
+      wakeMode: "mentions_only",
+    });
+
+    assert.equal(reader.getMember(swarm.swarmId, "bob")?.name, "bob");
+    assert.ok(
+      reader.listSwarms().some((candidate) => candidate.swarmId === swarm.swarmId),
+    );
+
+    const second = writer.createOrGetSwarm("coord-second", tmpDir);
+    assert.ok(
+      reader.listSwarms().some((candidate) => candidate.swarmId === second.swarmId),
+      "listSwarms should discover a swarm created after this store loaded",
+    );
+  });
+
   it("supports readBoard since, limit, seqs, and status", () => {
     const store = new SwarmStore(tmpDir);
     const swarm = store.createOrGetSwarm("sess-coord", tmpDir);

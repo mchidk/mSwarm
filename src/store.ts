@@ -516,9 +516,13 @@ export class SwarmStore {
   }
 
   /**
-   * Returns all swarms currently known to this store.
+   * Returns all swarms currently known to this store, reloading from disk so
+   * swarms created or updated by another plugin instance are included.
    */
   listSwarms(): StoredSwarmState[] {
+    if (fs.existsSync(this.swarmsDir)) {
+      this.loadAllFromDisk();
+    }
     return Array.from(this.swarms.values());
   }
 
@@ -741,8 +745,7 @@ export class SwarmStore {
    * Returns a member by name, or undefined if not found.
    */
   getMember(swarmId: string, name: string): StoredSwarmMember | undefined {
-    const swarm = this.swarms.get(swarmId);
-    return swarm?.members[name];
+    return this.refreshIfChanged(swarmId)?.members[name];
   }
 
   /**
