@@ -15,9 +15,12 @@ All notable changes to mSwarm.
 
 ### Coordinator and visibility
 
-- The coordinator prompt now makes the coordinator the single point of entry: answer the user first, delegate all
-  non-trivial work and follow-ups, and never block on a wait while a user request is pending.
+- The coordinator remains the single point of entry and delegates non-trivial work and follow-ups.
+- Added a fire-and-forget first responder: substantive Swarm-mode prompts start one `auto-*` worker without delaying
+  the coordinator's first token. Short status/meta prompts stay direct.
+- Restored the concise coordinator prompt to reduce reasoning latency.
 - Added live roster and spawn/kill/failure notices to the coordinator transcript.
+- Avoided redundant state writes when provider/model/variant did not change.
 - Swarm state is created lazily on the first worker spawn; entering Swarm mode or asking a meta question leaves no
   `.opencode` state.
 - `/mswarm kill` and coordinator-session deletion remove swarm state and prune empty mSwarm directories.

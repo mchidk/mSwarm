@@ -652,6 +652,20 @@ export class SwarmStore {
   }
 
   /**
+   * Updates the selected and coordinator models in one write.
+   */
+  setCoordinatorModel(swarmId: string, model: ModelRef): void {
+    const swarm = this.requireSwarm(swarmId);
+    swarm.selectedModel = model;
+    const coordinator = swarm.members.coordinator;
+    if (coordinator) {
+      coordinator.model = model;
+    }
+    swarm.updatedAt = nowIso();
+    this.persist(swarm);
+  }
+
+  /**
    * Validates and normalizes a member name.
    */
   validateMemberName(rawName: string): string {

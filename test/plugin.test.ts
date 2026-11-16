@@ -13,6 +13,7 @@ interface MockSession {
   id: string;
   title?: string;
   parentID?: string;
+  agent?: string;
   model?: MockModel;
   location: { directory: string };
 }
@@ -69,7 +70,11 @@ function createEventStream() {
   };
 }
 
-function createMockContext(rootDir: string, initialModel: MockModel) {
+function createMockContext(
+  rootDir: string,
+  initialModel: MockModel,
+  options: Record<string, unknown> = { autoDelegate: false },
+) {
   const sessions = new Map<string, MockSession>();
   const prompts: Array<{ sessionID: string; text: string; delivery?: string }> = [];
   const interrupts: string[] = [];
@@ -92,6 +97,7 @@ function createMockContext(rootDir: string, initialModel: MockModel) {
   sessions.set("coord-1", {
     id: "coord-1",
     title: "Coordinator",
+    agent: "build",
     model: initialModel,
     location: { directory: rootDir },
   });
@@ -102,7 +108,7 @@ function createMockContext(rootDir: string, initialModel: MockModel) {
       directory: rootDir,
       project: { id: "project-1", directory: rootDir, canonical: rootDir },
     },
-    options: {},
+    options,
     session: {
       create: async (input: {
         title: string;
@@ -147,6 +153,7 @@ function createMockContext(rootDir: string, initialModel: MockModel) {
         sessionID: string;
         text: string;
         delivery?: string;
+        metadata?: Record<string, unknown>;
         files?: unknown;
         agents?: unknown;
         skills?: unknown;
@@ -161,7 +168,7 @@ function createMockContext(rootDir: string, initialModel: MockModel) {
               agents: input.agents,
               skills: input.skills,
             },
-            metadata: {},
+            metadata: input.metadata ?? {},
             delivery: input.delivery ?? "steer",
           });
         }
@@ -291,6 +298,20 @@ function toolContext(sessionID: string, agent = "build") {
 
 function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 30));
+}
+
+async function waitUntil(
+  check: () => boolean,
+  timeoutMs = 1500,
+): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (check()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for condition");
 }
 
 describe("MSwarmPlugin (OpenCode 2.x)", () => {
@@ -457,7 +478,7 @@ describe("MSwarmPlugin (OpenCode 2.x)", () => {
       "Swarm mode alone must not create .opencode state",
     );
     assert.match(system[0]?.text ?? "", /coordinator/i);
-    assert.match(system[0]?.text ?? "", /single point of entry/i);
+    assert.match(system[0]?.text ?? "", /substantive analysis/i);
 
     const addTool = mock.tools.get("swarm");
     assert.ok(addTool);
@@ -482,6 +503,68 @@ describe("MSwarmPlugin (OpenCode 2.x)", () => {
     assert.equal(created.member.role, "coordinator");
     assert.ok(
       mock.syntheticMessages.some((message) => /Spawned @mode-worker/.test(message.text)),
+    );
+
+    await cleanup?.();
+    mock.events.close();
+  });
+
+  it("auto-starts a first responder for substantive Swarm prompts", async () => {
+    const mock = createMockContext(tmpDir, model, { autoDelegate: true });
+    const cleanup = await MSwarmPlugin.setup(mock.ctx as never);
+    mock.sessions.set("auto-session", {
+      id: "auto-session",
+      title: "Auto",
+      agent: "swarm",
+      model,
+      location: { directory: tmpDir },
+    });
+
+    const promptHook = mock.hooks.prompt?.[0];
+    assert.ok(promptHook);
+    await promptHook({
+      sessionID: "auto-session",
+      prompt: {
+        text: "Review the src/store.ts file and report any bugs in detail. This is a substantive review task.",
+      },
+      metadata: {},
+      delivery: "queue",
+    });
+
+    await waitUntil(() => {
+      const store = new SwarmStore(tmpDir);
+      const ctx = store.getSwarmBySession("auto-session");
+      return Boolean(ctx && store.getMember(ctx.swarm.swarmId, "auto-1"));
+    });
+
+    const store = new SwarmStore(tmpDir);
+    const ctx = store.getSwarmBySession("auto-session");
+    assert.ok(ctx);
+    assert.equal(ctx.member.role, "coordinator");
+    assert.equal(store.getMember(ctx.swarm.swarmId, "auto-1")?.role, "worker");
+    assert.ok(
+      mock.syntheticMessages.some((message) =>
+        /Spawned @auto-1/.test(message.text),
+      ),
+    );
+
+    await promptHook({
+      sessionID: "auto-session",
+      prompt: { text: "what color is the swarm agent" },
+      metadata: {},
+      delivery: "queue",
+    });
+    await flush();
+
+    const after = new SwarmStore(tmpDir);
+    const afterCtx = after.getSwarmBySession("auto-session");
+    assert.ok(afterCtx);
+    assert.equal(
+      Object.keys(afterCtx.swarm.members).filter((name) =>
+        name.startsWith("auto-"),
+      ).length,
+      1,
+      "a short status question must not start another worker",
     );
 
     await cleanup?.();

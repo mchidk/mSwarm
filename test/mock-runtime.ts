@@ -1,4 +1,8 @@
-import type { AvailableModel, SessionRuntime } from "../src/runtime.js";
+import type {
+  AvailableModel,
+  JsonMetadata,
+  SessionRuntime,
+} from "../src/runtime.js";
 import type { ModelRef } from "../src/types.js";
 
 /**
@@ -16,6 +20,7 @@ export class MockRuntime implements SessionRuntime {
     sessionID: string;
     text: string;
     delivery?: "steer" | "queue";
+    metadata?: JsonMetadata;
   }> = [];
   switched: Array<{ sessionID: string; model: ModelRef }> = [];
   interrupted: string[] = [];
@@ -77,6 +82,7 @@ export class MockRuntime implements SessionRuntime {
     sessionID: string;
     text: string;
     delivery?: "steer" | "queue";
+    metadata?: JsonMetadata;
   }): Promise<void> {
     if (
       this.failPromptForSession === options.sessionID ||

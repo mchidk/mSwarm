@@ -67,6 +67,41 @@ function findBrief(
 }
 
 /**
+ * Whether a user prompt is substantial enough to start a first-responder
+ * worker. This is intentionally conservative for short status/meta questions.
+ */
+function looksSubstantive(text: string): boolean {
+  const clean = text.trim();
+  if (!clean) {
+    return false;
+  }
+  if (clean.startsWith("/")) {
+    return false;
+  }
+  if (/^\[swarm wakeup/i.test(clean)) {
+    return false;
+  }
+  if (/^(hi|hello|hey|thanks|thank you)\b/i.test(clean) && clean.length < 60) {
+    return false;
+  }
+  if (/^(is|are) (it|this|the swarm|mswarm)\b/i.test(clean)) {
+    return false;
+  }
+  if (/^(what|which) (color|model|version|status)\b/i.test(clean)) {
+    return false;
+  }
+  if (/^(show|tell me) (the )?(status|board|roster)\b/i.test(clean)) {
+    return false;
+  }
+  if (clean.length >= 80) {
+    return true;
+  }
+  return /\b(review|analy|port|research|investigat|fix|correct|implement|build|add|change|update|test|write|create|compare|explain|plan|design|refactor|clean|install|commit|debug|optimi|improve|find|check|make)\b/i.test(
+    clean,
+  );
+}
+
+/**
  * A coordinator prompt for a Swarm-mode session before any workers exist.
  * This intentionally does not persist state; the first `swarm add` (or the
  * `/mswarm` command) creates the real swarm on disk.
@@ -132,6 +167,7 @@ async function handleCommand(
         sessionID: invocation.sessionID,
         text: "No active mSwarm team found for this session. Tell the user to start one with `/mswarm <goal>` or by selecting Swarm mode with Shift+Tab.",
         delivery: invocation.delivery ?? "queue",
+        metadata: { mswarmControl: true },
       });
       return;
     }
@@ -140,6 +176,7 @@ async function handleCommand(
       sessionID: invocation.sessionID,
       text: `Present this mSwarm board summary clearly to the user. Do not modify files or spawn workers.\n\n${summary}`,
       delivery: invocation.delivery ?? "queue",
+      metadata: { mswarmControl: true },
     });
     return;
   }
@@ -149,6 +186,7 @@ async function handleCommand(
       sessionID: invocation.sessionID,
       text: "This session is a swarm worker. Use the coordinator session to manage the swarm; ask your parent with `post_message` if you need a roster or model change.",
       delivery: invocation.delivery ?? "queue",
+      metadata: { mswarmControl: true },
     });
     return;
   }
@@ -159,6 +197,7 @@ async function handleCommand(
         sessionID: invocation.sessionID,
         text: "No active mSwarm team found for this session. Nothing to stop.",
         delivery: invocation.delivery ?? "queue",
+        metadata: { mswarmControl: true },
       });
       return;
     }
@@ -195,6 +234,7 @@ async function handleCommand(
       sessionID: invocation.sessionID,
       text: report,
       delivery: invocation.delivery ?? "queue",
+      metadata: { mswarmControl: true },
     });
     return;
   }
@@ -236,6 +276,100 @@ export default Plugin.define({
     const runtime = new OpenCodeRuntime(ctx);
     const dispatcher = new SwarmDispatcher(runtime, store, workspace);
 
+    const autoDelegateEnabled = ctx.options.autoDelegate !== false;
+    const sessionAgents = new Map<string, string>();
+    const autoSeen = new Map<string, { text: string; at: number }>();
+
+    const getSessionAgent = async (
+      sessionID: string,
+    ): Promise<string | undefined> => {
+      const cached = sessionAgents.get(sessionID);
+      if (cached) {
+        return cached;
+      }
+      try {
+        const info = await ctx.session.get({ sessionID });
+        const agent = info.agent
+          ? String(info.agent).toLowerCase()
+          : undefined;
+        if (agent) {
+          sessionAgents.set(sessionID, agent);
+        }
+        return agent;
+      } catch {
+        return undefined;
+      }
+    };
+
+    /**
+     * Starts one first-responder worker for a substantive prompt. This is
+     * fire-and-forget so it never delays the coordinator's first token.
+     */
+    const maybeAutoDelegate = async (
+      sessionID: string,
+      text: string,
+    ): Promise<void> => {
+      let swarmCtx = store.getSwarmBySession(sessionID);
+      if (swarmCtx && swarmCtx.member.role !== "coordinator") {
+        return;
+      }
+
+      let agent = sessionAgents.get(sessionID);
+      if (!swarmCtx && !agent) {
+        agent = await getSessionAgent(sessionID);
+      }
+      const isSwarmAgent = agent === "swarm" || agent === "mswarm";
+      if (!swarmCtx && !isSwarmAgent) {
+        return;
+      }
+
+      if (!swarmCtx) {
+        const model = await dispatcher.resolveSelectedModel(sessionID);
+        store.createOrGetSwarm(sessionID, rootDir, model);
+        swarmCtx = store.getSwarmBySession(sessionID);
+      }
+      if (!swarmCtx) {
+        return;
+      }
+
+      const working = Object.values(swarmCtx.swarm.members).filter(
+        (member) =>
+          member.role !== "coordinator" && member.state === "working",
+      ).length;
+      if (working >= 3) {
+        return;
+      }
+
+      let index = 1;
+      while (store.getMember(swarmCtx.swarm.swarmId, `auto-${index}`)) {
+        index++;
+      }
+      const name = `auto-${index}`;
+      const brief = [
+        "You are the coordinator's first responder for the user's latest request.",
+        "If this is analysis, review, research, or a question, investigate and report findings without editing files.",
+        "If it requires changes, implement them in the shared workspace, run focused checks, and report files changed and tests run.",
+        "Post `@coordinator [done] <summary>` when complete, or `@coordinator [blocked] <details>` if blocked.",
+        "",
+        "User request:",
+        text,
+      ].join("\n");
+
+      const result = await dispatcher.addWorkers(sessionID, {
+        name,
+        brief,
+        workspace: "inherit",
+        role: "worker",
+      });
+      if (result.created.length === 0) {
+        console.error(
+          `[opencode-mswarm] auto-delegation failed: ${result.failures
+            .map((failure) => `${failure.name}: ${failure.error}`)
+            .join("; ")}`,
+        );
+      }
+    };
+
     await ctx.tool.transform((editor) => {
       for (const tool of createSwarmTools(ctx, store, dispatcher, rootDir)) {
         editor.add(tool);
@@ -257,6 +391,29 @@ export default Plugin.define({
     // accurate when a user talks to the coordinator while workers are running.
     await ctx.session.hook("prompt", (event) => {
       store.markWorking(event.sessionID);
+      if (!autoDelegateEnabled) {
+        return;
+      }
+      const metadata = event.metadata ?? {};
+      if (metadata.mswarmControl || metadata.mswarmWake) {
+        return;
+      }
+      const text = event.prompt.text.trim();
+      if (!text || !looksSubstantive(text)) {
+        return;
+      }
+      const now = Date.now();
+      const prior = autoSeen.get(event.sessionID);
+      if (prior && prior.text === text && now - prior.at < 30_000) {
+        return;
+      }
+      autoSeen.set(event.sessionID, { text, at: now });
+      void maybeAutoDelegate(event.sessionID, text).catch((error) => {
+        console.error(
+          "[opencode-mswarm] auto-delegate failed:",
+          error instanceof Error ? error.message : error,
+        );
+      });
     });
 
     // Inject the coordinator/worker contract immediately before each model call.
@@ -268,6 +425,7 @@ export default Plugin.define({
       }
       const swarmCtx = store.getSwarmBySession(event.sessionID);
       const agentID = String(event.agent).toLowerCase();
+      sessionAgents.set(event.sessionID, agentID);
       const isSwarmMode = agentID === "swarm" || agentID === "mswarm";
 
       if (!swarmCtx) {
@@ -313,6 +471,7 @@ export default Plugin.define({
       "session.execution.failed",
       "session.execution.interrupted",
       "session.model.selected",
+      "session.agent.selected",
       "session.deleted",
     ] as const;
 
@@ -335,6 +494,13 @@ export default Plugin.define({
                   dispatcher.handleSessionModelSelected(
                     event.data.sessionID,
                     toModelRef(event.data.model),
+                  );
+                  break;
+
+                case "session.agent.selected":
+                  sessionAgents.set(
+                    event.data.sessionID,
+                    String(event.data.agent).toLowerCase(),
                   );
                   break;
 

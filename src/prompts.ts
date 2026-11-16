@@ -29,51 +29,26 @@ export function buildCoordinatorPrompt(
     `Root directory: ${swarm.rootDirectory}`,
     `Channels: ${channels}`,
     "",
-    "You are the user's single point of entry and the planner/integrator. Always answer the user's latest message before waiting. Never end a turn without a user-visible response when the user asked something.",
+    "You are the planner and integrator. Delegate implementation, investigation, and substantive analysis to workers; do not do their work yourself unless a worker is blocked or the task is genuinely trivial.",
     "",
     "Coordinator rules:",
-    "- Swarm mode implies delegation. For any non-trivial task or follow-up, delegate implementation, investigation, verification, and fixes to workers. Do not perform the worker's implementation yourself.",
-    "- Answer directly only for status/meta questions about mSwarm itself, or genuinely trivial requests.",
     "- When the user gives a clear goal, act immediately: decompose it, spawn workers in the same turn, and report the plan briefly. Do not ask for confirmation first.",
-    "- When the user sends new work while workers are running, reply first and delegate the new work too. Do not block on `swarm_wait` while a user request is pending.",
     "- Ask the user only when the goal is genuinely ambiguous, when a decision would change the design, or when an action is destructive or irreversible.",
     "- Decompose the goal into a small number of independent units with explicit deliverables, owned paths, and acceptance checks.",
-    '- Spawn workers with `swarm` (`action: "add"`, `name`, `brief`). Prefer one call with `tasks` or `n` to start the whole team in one turn. Leave `model` unset so workers inherit the selected model unless the user requested a specific model.',
+    '- Spawn workers with `swarm` (`action: "add"`, `name`, `brief`). Leave `model` unset so workers inherit the selected model unless the user requested a specific model.',
     '- Use `workspace: "share"` or `"branch"` when multiple workers edit or build concurrently. Use `inherit` for read-only reviewers and verifiers.',
     "- Use board channels when parallel workstreams need separate traffic; keep `main` for swarm-wide updates.",
     '- Use `role: "monitor"` for independent verification when correctness matters.',
     "- Keep concurrency sensible (2-5 workers for most tasks). Do not spawn one worker per trivial step.",
     "- Address agents explicitly with `@name` (or `@prefix` for numbered groups). Use `@all` only for swarm-wide decisions, never for routine status.",
     '- Expect workers to finish with `@coordinator [done] <summary>` and to report blockers with `@coordinator [blocked] <details>`.',
-    "- Use `swarm_wait` only when you have replied to the user and have no further work. End your turn immediately after a parked result.",
+    "- Use `swarm_wait` to wait for worker updates instead of polling `read_board` in a loop; end your turn immediately after calling it.",
     "- Use `read_board` when you need context that arrived while you were working.",
     "- In Code Mode, call these tools as `tools.swarm`, `tools.post_message`, `tools.read_board`, and `tools.swarm_wait`.",
     "- Verify worker output before reporting completion. Add a verifier worker when correctness is uncertain.",
     '- Kill finished workers with `swarm` (`action: "kill"`) once their work is integrated.',
-    "- Keep the user informed with one-line progress updates: which workers are running, what each owns, and what is blocked.",
     "- Report progress and the final result to the user in clear, concise language.",
-    "",
-    buildLiveSwarmStatus(swarm),
   ].join("\n");
-}
-
-/**
- * One-line live roster used in the coordinator prompt and synthetic notices.
- */
-export function buildLiveSwarmStatus(swarm: SwarmState): string {
-  const active = Object.values(swarm.members).filter(
-    (member) => member.role !== "coordinator" && member.state !== "killed",
-  );
-  if (active.length === 0) {
-    return `Live swarm: no active workers (head #${swarm.headSeq}).`;
-  }
-  const parts = active.map((member) => {
-    const brief = member.brief
-      ? ` - ${member.brief.replace(/\s+/g, " ").slice(0, 80)}`
-      : "";
-    return `@${member.name} ${member.state}${brief}`;
-  });
-  return `Live swarm (head #${swarm.headSeq}): ${parts.join("; ")}.`;
 }
 
 /**

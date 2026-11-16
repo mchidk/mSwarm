@@ -12,6 +12,8 @@ export interface AvailableModel {
   isDefault?: boolean;
 }
 
+export type JsonMetadata = Record<string, string | number | boolean | null>;
+
 /**
  * Minimal session/runtime surface used by the dispatcher.
  *
@@ -29,6 +31,7 @@ export interface SessionRuntime {
     sessionID: string;
     text: string;
     delivery?: "steer" | "queue";
+    metadata?: JsonMetadata;
   }): Promise<void>;
   switchModel(sessionID: string, model: ModelRef): Promise<void>;
   interruptSession(sessionID: string): Promise<void>;
@@ -102,11 +105,13 @@ export class OpenCodeRuntime implements SessionRuntime {
     sessionID: string;
     text: string;
     delivery?: "steer" | "queue";
+    metadata?: JsonMetadata;
   }): Promise<void> {
     await this.ctx.session.prompt({
       sessionID: options.sessionID,
       text: options.text,
       delivery: options.delivery ?? "queue",
+      ...(options.metadata ? { metadata: options.metadata } : {}),
     });
   }
 

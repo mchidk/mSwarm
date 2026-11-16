@@ -15,6 +15,10 @@ message board, targeted wakeups, git worktree isolation, and an event-driven wai
   appears, then describe the goal. No slash command required. `/mswarm <goal>` also works from Build or Plan.
 - **Coordinator-first delegation** - the coordinator stays the single point of entry, answers the user first, and
   delegates implementation, investigation, verification, and follow-up work to workers.
+- **Automatic first responder** - substantive Swarm-mode prompts start one background worker immediately, without
+  delaying the coordinator's first response. Short status/meta questions stay direct.
+- **Concise coordinator prompt** - the coordinator prompt is intentionally short to minimize reasoning latency;
+  delegation is reinforced by the background first responder instead of a long instruction block.
 - **Visible swarm activity** - spawn, kill, failure, and live roster notices are added to the coordinator transcript,
   so you can see what is running and what each worker owns.
 - **Lazy state and cleanup** - entering Swarm mode or asking a meta question writes nothing to disk. State is created
@@ -90,7 +94,25 @@ Add the plugin and the Swarm agent to your `opencode.json(c)`:
 }
 ```
 
-The plugin adds the full coordinator instructions at request time, so the agent entry can stay minimal.
+The plugin adds the coordinator instructions at request time, so the agent entry can stay minimal.
+
+### Plugin options
+
+Automatic first-responder delegation is on by default. To disable it and have the coordinator decide when to spawn:
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "opencode-mswarm",
+      "options": { "autoDelegate": false }
+    }
+  ]
+}
+```
+
+For a local checkout, use the checkout path as `package`. Disabling auto-delegation restores purely coordinator-driven
+spawning.
 
 ### Local development
 
@@ -248,6 +270,10 @@ needed.
 - Closing/deleting the coordinator session also cleans its worktrees and swarm state.
 - Spawn, kill, failure, and live-roster notices are synthetic transcript messages; they are best-effort and never block
   the swarm.
+- Automatic first-responder delegation is fire-and-forget, so it does not delay the coordinator's first token. It is
+  skipped for short status/meta prompts and capped at three concurrent auto-workers.
+- The coordinator prompt is intentionally concise. Repeated model-selection events do not rewrite state when the
+  provider/model/variant is unchanged.
 
 ---
 

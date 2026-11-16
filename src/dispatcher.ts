@@ -77,6 +77,10 @@ function activeMembersSummary(swarm: StoredSwarmState): string {
     .join("; ");
 }
 
+function normalizeVariant(variant: string | undefined): string {
+  return !variant || variant === "default" ? "" : variant;
+}
+
 function sameModel(a: ModelRef | undefined, b: ModelRef | undefined): boolean {
   if (!a || !b) {
     return a === b;
@@ -84,7 +88,7 @@ function sameModel(a: ModelRef | undefined, b: ModelRef | undefined): boolean {
   return (
     a.providerID === b.providerID &&
     a.modelID === b.modelID &&
-    (a.variant ?? "") === (b.variant ?? "")
+    normalizeVariant(a.variant) === normalizeVariant(b.variant)
   );
 }
 
@@ -120,8 +124,14 @@ export class SwarmDispatcher {
       return;
     }
     const { swarm, member } = ctx;
-    if (member.role === "coordinator" && !sameModel(swarm.selectedModel, model)) {
-      this.store.setSelectedModel(swarm.swarmId, model);
+    if (member.role === "coordinator") {
+      if (
+        !sameModel(swarm.selectedModel, model) ||
+        !sameModel(member.model, model)
+      ) {
+        this.store.setCoordinatorModel(swarm.swarmId, model);
+      }
+      return;
     }
     if (!sameModel(member.model, model)) {
       this.store.updateMember(swarm.swarmId, member.name, { model });
@@ -602,6 +612,7 @@ export class SwarmDispatcher {
         sessionID: target.sessionID,
         text: notice,
         delivery: "queue",
+        metadata: { mswarmControl: true },
       });
     } catch (error) {
       notified = false;
@@ -1039,6 +1050,7 @@ export class SwarmDispatcher {
         sessionID: latest.sessionID,
         text: promptText,
         delivery: "queue",
+        metadata: { mswarmWake: true },
       });
       const current =
         this.store.getMember(swarm.swarmId, latest.name) ?? latest;
