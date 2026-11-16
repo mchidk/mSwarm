@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.opencode/mswarm/
+*.tsbuildinfo
+
+# Never commit local credentials or key material.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local artifacts
+*.log
+*.tgz
+
+# OS clutter
+.DS_Store
+Thumbs.db

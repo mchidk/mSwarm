@@ -1,0 +1,47 @@
+{
+  "name": "opencode-mswarm",
+  "version": "0.2.0",
+  "description": "Multi-agent swarm orchestration plugin for OpenCode 2.x",
+  "type": "module",
+  "author": "Michael Christensen",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "opencode-mswarm": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import ./test/ts-resolve-hook.mjs --test test/*.test.ts"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "swarm",
+    "multi-agent"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@opencode/plugin": "^2.3.0",
+    "jsonc-parser": "^3.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}
