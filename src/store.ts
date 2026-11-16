@@ -278,7 +278,20 @@ export class SwarmStore {
     const filePath = this.getSwarmFilePath(swarmId);
     const stamp = this.stampFor(filePath);
     if (!stamp) {
-      return this.swarms.get(swarmId);
+      const cached = this.swarms.get(swarmId);
+      if (cached) {
+        if (cached.coordinatorSessionID) {
+          this.sessionIndex.delete(cached.coordinatorSessionID);
+        }
+        for (const member of Object.values(cached.members)) {
+          if (member.sessionID) {
+            this.sessionIndex.delete(member.sessionID);
+          }
+        }
+        this.swarms.delete(swarmId);
+      }
+      this.fileStamps.delete(swarmId);
+      return undefined;
     }
     if (this.fileStamps.get(swarmId) === stamp) {
       return this.swarms.get(swarmId);
@@ -524,6 +537,52 @@ export class SwarmStore {
       this.loadAllFromDisk();
     }
     return Array.from(this.swarms.values());
+  }
+
+  /**
+   * Removes a swarm and its state file, then prunes empty mSwarm directories.
+   */
+  deleteSwarm(swarmId: string): void {
+    const swarm = this.swarms.get(swarmId);
+    if (swarm) {
+      if (swarm.coordinatorSessionID) {
+        this.sessionIndex.delete(swarm.coordinatorSessionID);
+      }
+      for (const member of Object.values(swarm.members)) {
+        if (member.sessionID) {
+          this.sessionIndex.delete(member.sessionID);
+        }
+      }
+      this.swarms.delete(swarmId);
+    }
+
+    const filePath = this.getSwarmFilePath(swarmId);
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      // Already removed or never persisted.
+    }
+    this.fileStamps.delete(swarmId);
+    this.unknownSessions.clear();
+    this.pruneEmptyStateDirs();
+  }
+
+  private pruneEmptyStateDirs(): void {
+    const dirs = [
+      this.swarmsDir,
+      path.dirname(this.swarmsDir),
+      path.dirname(path.dirname(this.swarmsDir)),
+    ];
+    for (const dir of dirs) {
+      try {
+        if (!fs.existsSync(dir) || fs.readdirSync(dir).length > 0) {
+          break;
+        }
+        fs.rmdirSync(dir);
+      } catch {
+        break;
+      }
+    }
   }
 
   /**

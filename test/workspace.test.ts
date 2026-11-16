@@ -57,6 +57,11 @@ describe("WorkspaceManager", () => {
       ),
       false,
     );
+    assert.equal(
+      fs.existsSync(path.join(tmpDir, ".opencode", "mswarm", "worktrees")),
+      false,
+      "empty worktrees root should be pruned",
+    );
 
     const branch = await manager.prepareWorkspace(tmpDir, "sw1", "brancher", "branch");
     assert.notEqual(branch.workspacePath, tmpDir);
@@ -82,6 +87,10 @@ describe("WorkspaceManager", () => {
       fs.existsSync(
         path.join(tmpDir, ".opencode", "mswarm", "worktrees", "sw1"),
       ),
+      false,
+    );
+    assert.equal(
+      fs.existsSync(path.join(tmpDir, ".opencode", "mswarm", "worktrees")),
       false,
     );
 

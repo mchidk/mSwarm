@@ -36,6 +36,11 @@ export interface SessionRuntime {
   getSessionModel(sessionID: string): Promise<ModelRef | undefined>;
   /** true = running, false = idle, undefined = session missing/unreachable. */
   isSessionBusy(sessionID: string): Promise<boolean | undefined>;
+  syntheticMessage(options: {
+    sessionID: string;
+    text: string;
+    description?: string;
+  }): Promise<void>;
   listModels(): Promise<AvailableModel[]>;
 }
 
@@ -133,6 +138,22 @@ export class OpenCodeRuntime implements SessionRuntime {
       };
     } catch {
       return undefined;
+    }
+  }
+
+  async syntheticMessage(options: {
+    sessionID: string;
+    text: string;
+    description?: string;
+  }): Promise<void> {
+    try {
+      await this.ctx.session.synthetic({
+        sessionID: options.sessionID,
+        text: options.text,
+        ...(options.description ? { description: options.description } : {}),
+      });
+    } catch {
+      // Synthetic status is best-effort and must never block the swarm.
     }
   }
 

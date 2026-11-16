@@ -20,6 +20,11 @@ export class MockRuntime implements SessionRuntime {
   switched: Array<{ sessionID: string; model: ModelRef }> = [];
   interrupted: string[] = [];
   removed: string[] = [];
+  syntheticMessages: Array<{
+    sessionID: string;
+    text: string;
+    description?: string;
+  }> = [];
   private readonly models = new Map<string, ModelRef>();
   private nextId = 1;
   busySessions = new Set<string>();
@@ -99,6 +104,14 @@ export class MockRuntime implements SessionRuntime {
 
   async getSessionModel(sessionID: string): Promise<ModelRef | undefined> {
     return this.models.get(sessionID);
+  }
+
+  async syntheticMessage(options: {
+    sessionID: string;
+    text: string;
+    description?: string;
+  }): Promise<void> {
+    this.syntheticMessages.push(options);
   }
 
   async isSessionBusy(sessionID: string): Promise<boolean | undefined> {

@@ -74,6 +74,11 @@ function createMockContext(rootDir: string, initialModel: MockModel) {
   const prompts: Array<{ sessionID: string; text: string; delivery?: string }> = [];
   const interrupts: string[] = [];
   const removed: string[] = [];
+  const syntheticMessages: Array<{
+    sessionID: string;
+    text: string;
+    description?: string;
+  }> = [];
   const tools = new Map<string, { execute: (input: unknown, context: unknown) => Promise<{ content: string }> }>();
   const commands: Array<{
     name: string;
@@ -185,6 +190,14 @@ function createMockContext(rootDir: string, initialModel: MockModel) {
         removed.push(sessionID);
         sessions.delete(sessionID);
       },
+      synthetic: async (input: {
+        sessionID: string;
+        text: string;
+        description?: string;
+      }) => {
+        syntheticMessages.push(input);
+        return { id: `synth-${syntheticMessages.length}` };
+      },
       hook: async (
         name: string,
         callback: (event: unknown) => Promise<void> | void,
@@ -257,6 +270,7 @@ function createMockContext(rootDir: string, initialModel: MockModel) {
     prompts,
     interrupts,
     removed,
+    syntheticMessages,
     tools,
     commands,
     hooks,
@@ -264,10 +278,10 @@ function createMockContext(rootDir: string, initialModel: MockModel) {
   };
 }
 
-function toolContext(sessionID: string) {
+function toolContext(sessionID: string, agent = "build") {
   return {
     sessionID,
-    agent: "build",
+    agent,
     messageID: `msg-${sessionID}`,
     id: "call-1",
     signal: new AbortController().signal,
@@ -406,6 +420,19 @@ describe("MSwarmPlugin (OpenCode 2.x)", () => {
     });
     assert.ok(mock.interrupts.includes("sess-1"));
     assert.match(mock.prompts[mock.prompts.length - 1]?.text ?? "", /dev/);
+    assert.ok(
+      mock.syntheticMessages.some((message) => /Killed @dev/.test(message.text)),
+    );
+    assert.equal(
+      new SwarmStore(tmpDir).getSwarmBySession("coord-1"),
+      undefined,
+      "kill must remove swarm state",
+    );
+    assert.equal(
+      fs.existsSync(path.join(tmpDir, ".opencode")),
+      false,
+      "kill must prune empty mSwarm directories",
+    );
 
     await cleanup?.();
     mock.events.close();
@@ -424,11 +451,38 @@ describe("MSwarmPlugin (OpenCode 2.x)", () => {
     });
 
     const store = new SwarmStore(tmpDir);
-    const swarmCtx = store.getSwarmBySession("mode-session");
-    assert.ok(swarmCtx);
-    assert.equal(swarmCtx.member.role, "coordinator");
-    assert.deepEqual(swarmCtx.swarm.selectedModel, model);
+    assert.equal(
+      store.getSwarmBySession("mode-session"),
+      undefined,
+      "Swarm mode alone must not create .opencode state",
+    );
     assert.match(system[0]?.text ?? "", /coordinator/i);
+    assert.match(system[0]?.text ?? "", /single point of entry/i);
+
+    const addTool = mock.tools.get("swarm");
+    assert.ok(addTool);
+    const virtualStatus = JSON.parse(
+      await addTool.execute({ action: "status" }, toolContext("mode-session", "swarm")).then(
+        (result) => result.content,
+      ),
+    );
+    assert.equal(virtualStatus.ok, true);
+    assert.match(virtualStatus.note ?? "", /No workers yet/);
+    assert.equal(new SwarmStore(tmpDir).getSwarmBySession("mode-session"), undefined);
+
+    const added = JSON.parse(
+      await addTool.execute(
+        { action: "add", name: "mode-worker", brief: "Do the work" },
+        toolContext("mode-session", "swarm"),
+      ).then((result) => result.content),
+    );
+    assert.equal(added.ok, true);
+    const created = new SwarmStore(tmpDir).getSwarmBySession("mode-session");
+    assert.ok(created);
+    assert.equal(created.member.role, "coordinator");
+    assert.ok(
+      mock.syntheticMessages.some((message) => /Spawned @mode-worker/.test(message.text)),
+    );
 
     await cleanup?.();
     mock.events.close();

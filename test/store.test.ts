@@ -168,6 +168,31 @@ describe("SwarmStore", () => {
     assert.ok((storeA.getSwarm(swarm.swarmId)?.revision ?? 0) >= 2);
   });
 
+  it("deletes a swarm and prunes empty state directories", () => {
+    const store = new SwarmStore(tmpDir);
+    const swarm = store.createOrGetSwarm("coord-delete", tmpDir);
+    store.addMember(swarm.swarmId, {
+      name: "worker",
+      role: "worker",
+      state: "waiting",
+      sessionID: "sess-worker",
+      workspace: "inherit",
+      wakeMode: "mentions_only",
+    });
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, ".opencode", "mswarm", "swarms")),
+    );
+
+    store.deleteSwarm(swarm.swarmId);
+    assert.equal(store.getSwarm(swarm.swarmId), undefined);
+    assert.equal(store.getSwarmBySession("coord-delete"), undefined);
+    assert.equal(
+      fs.existsSync(path.join(tmpDir, ".opencode")),
+      false,
+      "empty .opencode/mswarm directories should be pruned",
+    );
+  });
+
   it("refreshes getMember and listSwarms from disk", () => {
     const reader = new SwarmStore(tmpDir);
     const writer = new SwarmStore(tmpDir);

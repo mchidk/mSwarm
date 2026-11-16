@@ -6,7 +6,7 @@ import { buildCoordinatorPrompt, buildWorkerPrompt } from "./prompts.js";
 import { OpenCodeRuntime } from "./runtime.js";
 import { SwarmStore } from "./store.js";
 import { createSwarmTools } from "./tools.js";
-import type { ModelRef } from "./types.js";
+import type { ModelRef, SwarmMember, SwarmState } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
 
 /**
@@ -66,6 +66,55 @@ function findBrief(
   return firstMention?.text;
 }
 
+/**
+ * A coordinator prompt for a Swarm-mode session before any workers exist.
+ * This intentionally does not persist state; the first `swarm add` (or the
+ * `/mswarm` command) creates the real swarm on disk.
+ */
+function transientCoordinator(
+  sessionID: string,
+  rootDir: string,
+  model?: ModelRef,
+): { swarm: SwarmState; member: SwarmMember } {
+  const now = new Date().toISOString();
+  const member: SwarmMember = {
+    name: "coordinator",
+    role: "coordinator",
+    state: "working",
+    sessionID,
+    model,
+    workspace: "inherit",
+    workspacePath: rootDir,
+    wakeMode: "mentions_only",
+    channels: ["main"],
+    lastActiveAt: now,
+    createdAt: now,
+  };
+  const swarm: SwarmState = {
+    version: 2,
+    swarmId: sessionID,
+    rootDirectory: rootDir,
+    coordinatorSessionID: sessionID,
+    selectedModel: model,
+    createdAt: now,
+    updatedAt: now,
+    headSeq: 0,
+    channels: [
+      {
+        id: "main",
+        name: "main",
+        description: "Default swarm channel",
+        createdAt: now,
+        archived: false,
+        subscribers: ["coordinator"],
+      },
+    ],
+    members: { coordinator: member },
+    messages: [],
+  };
+  return { swarm, member };
+}
+
 async function handleCommand(
   ctx: PluginContext,
   store: SwarmStore,
@@ -117,6 +166,7 @@ async function handleCommand(
       (member) => member.role !== "coordinator" && member.state !== "killed",
     );
     const killedNames: string[] = [];
+    let failedKills = 0;
     for (const worker of activeWorkers) {
       try {
         const killed = await dispatcher.killWorker(
@@ -125,14 +175,22 @@ async function handleCommand(
         );
         killedNames.push(...killed.map((member) => member.name));
       } catch {
-        // Best-effort cleanup across all active workers.
+        failedKills++;
       }
     }
 
+    if (failedKills === 0) {
+      store.deleteSwarm(existing.swarm.swarmId);
+    }
+
+    const cleaned =
+      failedKills === 0
+        ? "The swarm state and worktrees were cleaned up."
+        : `${failedKills} worker(s) could not be stopped, so swarm state was retained for retry.`;
     const report =
       killedNames.length > 0
-        ? `Stopped and killed active swarm workers: ${killedNames.join(", ")}. Inform the user.`
-        : "No active swarm workers were running. Inform the user.";
+        ? `Stopped and killed active swarm workers: ${killedNames.join(", ")}. ${cleaned} Inform the user.`
+        : `No active swarm workers were running. ${cleaned} Inform the user.`;
     await ctx.session.prompt({
       sessionID: invocation.sessionID,
       text: report,
@@ -208,18 +266,29 @@ export default Plugin.define({
       if (event.model) {
         dispatcher.recordSessionModel(event.sessionID, toModelRef(event.model));
       }
-      let swarmCtx = store.getSwarmBySession(event.sessionID);
+      const swarmCtx = store.getSwarmBySession(event.sessionID);
       const agentID = String(event.agent).toLowerCase();
       const isSwarmMode = agentID === "swarm" || agentID === "mswarm";
-      if (!swarmCtx && isSwarmMode) {
-        const model = event.model ? toModelRef(event.model) : undefined;
-        store.createOrGetSwarm(event.sessionID, rootDir, model);
-        swarmCtx = store.getSwarmBySession(event.sessionID);
-      }
-      store.markWorking(event.sessionID);
+
       if (!swarmCtx) {
+        if (!isSwarmMode) {
+          return;
+        }
+        // Do not create state just because Swarm mode is selected. Meta
+        // questions and simple answers should leave no .opencode artifacts.
+        const transient = transientCoordinator(
+          event.sessionID,
+          rootDir,
+          event.model ? toModelRef(event.model) : undefined,
+        );
+        event.system.push({
+          type: "text",
+          text: buildCoordinatorPrompt(transient.swarm, transient.member),
+        });
         return;
       }
+
+      store.markWorking(event.sessionID);
       if (swarmCtx.member.role === "coordinator") {
         event.system.push({
           type: "text",

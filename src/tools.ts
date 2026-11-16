@@ -185,6 +185,11 @@ export function createSwarmTools(
   dispatcher: SwarmDispatcher,
   rootDir: string,
 ): ToolInfo[] {
+  const isSwarmAgent = (agent: string): boolean => {
+    const id = String(agent).toLowerCase();
+    return id === "swarm" || id === "mswarm";
+  };
+
   const ensureSwarmContext = async (sessionID: string) => {
     const existing = store.getSwarmBySession(sessionID);
     if (existing) {
@@ -284,6 +289,25 @@ export function createSwarmTools(
           case "status": {
             const swarmCtx = store.getSwarmBySession(context.sessionID);
             if (!swarmCtx) {
+              if (isSwarmAgent(context.agent)) {
+                return {
+                  content: toJson({
+                    ok: true,
+                    swarmId: context.sessionID,
+                    head: 0,
+                    members: [
+                      {
+                        name: "coordinator",
+                        role: "coordinator",
+                        state: "working",
+                        sessionID: context.sessionID,
+                        workspace: "inherit",
+                      },
+                    ],
+                    note: "No workers yet. Use swarm add to start the team.",
+                  }),
+                };
+              }
               return {
                 content: toErrorJson(
                   `Session "${context.sessionID}" is not part of an active swarm.`,
@@ -471,6 +495,30 @@ export function createSwarmTools(
       try {
         const swarmCtx = store.getSwarmBySession(context.sessionID);
         if (!swarmCtx) {
+          if (isSwarmAgent(context.agent)) {
+            if (args.status) {
+              return {
+                content: toJson({
+                  ok: true,
+                  status: {
+                    name: "coordinator",
+                    state: "working",
+                    wakeMode: "mentions_only",
+                    channels: ["main"],
+                    brief: undefined,
+                  },
+                }),
+              };
+            }
+            return {
+              content: toJson({
+                ok: true,
+                messages: [],
+                head: 0,
+                note: "No workers yet. Use swarm add to start the team.",
+              }),
+            };
+          }
           return {
             content: toErrorJson(
               `Session "${context.sessionID}" is not part of an active swarm.`,

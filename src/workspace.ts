@@ -206,6 +206,16 @@ export class WorkspaceManager {
     ) {
       await this.removeWorktree(rootDir, workspacePath);
       this.pruneEmptyParents(workspacePath, expectedPrefix);
+      try {
+        if (
+          fs.existsSync(expectedPrefix) &&
+          fs.readdirSync(expectedPrefix).length === 0
+        ) {
+          fs.rmdirSync(expectedPrefix);
+        }
+      } catch {
+        // Leave a non-empty or locked directory in place.
+      }
     }
 
     if (branchName && branchName.startsWith("mswarm/") && options.deleteBranch) {

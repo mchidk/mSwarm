@@ -55,6 +55,28 @@ function takeBatch(messages: BoardMessage[]): {
   };
 }
 
+function firstLine(text: string, max = 120): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  return clean.length > max ? `${clean.slice(0, max - 3)}...` : clean;
+}
+
+function activeMembersSummary(swarm: StoredSwarmState): string {
+  const active = Object.values(swarm.members).filter(
+    (member) => member.role !== "coordinator" && member.state !== "killed",
+  );
+  if (active.length === 0) {
+    return "no active workers";
+  }
+  return active
+    .map(
+      (member) =>
+        `@${member.name} ${member.state}${
+          member.brief ? ` (${firstLine(member.brief, 80)})` : ""
+        }`,
+    )
+    .join("; ");
+}
+
 function sameModel(a: ModelRef | undefined, b: ModelRef | undefined): boolean {
   if (!a || !b) {
     return a === b;
@@ -448,6 +470,16 @@ export class SwarmDispatcher {
           text: promptText,
           delivery: "queue",
         });
+        const liveSwarm = this.store.getSwarm(swarm.swarmId) ?? swarm;
+        await this.runtime.syntheticMessage({
+          sessionID: liveSwarm.coordinatorSessionID,
+          text: `[mSwarm] Spawned @${refreshed.name} (${workspaceMode}${
+            refreshed.branchName ? `, branch ${refreshed.branchName}` : ""
+          }): ${firstLine(spec.brief)}. Active: ${activeMembersSummary(
+            liveSwarm,
+          )}. Head #${liveSwarm.headSeq}.`,
+          description: "mSwarm worker spawned",
+        });
         created.push(refreshed);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -652,6 +684,15 @@ export class SwarmDispatcher {
         killedAt: new Date().toISOString(),
       });
       killed.push(updated);
+
+      const liveSwarm = this.store.getSwarm(swarm.swarmId) ?? swarm;
+      await this.runtime.syntheticMessage({
+        sessionID: liveSwarm.coordinatorSessionID,
+        text: `[mSwarm] Killed @${target.name}. Active: ${activeMembersSummary(
+          liveSwarm,
+        )}. Head #${liveSwarm.headSeq}.`,
+        description: "mSwarm worker killed",
+      });
     }
 
     return killed;
@@ -866,6 +907,12 @@ export class SwarmDispatcher {
       waitingSinceSeq: undefined,
     });
 
+    await this.runtime.syntheticMessage({
+      sessionID: swarm.coordinatorSessionID,
+      text: `[mSwarm] Error: @${member.name} failed - ${firstLine(error, 160)}`,
+      description: "mSwarm worker error",
+    });
+
     if (member.role === "coordinator") {
       return;
     }
@@ -918,6 +965,23 @@ export class SwarmDispatcher {
     if (member.state === "killed") {
       return;
     }
+
+    if (member.role === "coordinator") {
+      for (const other of Object.values(swarm.members)) {
+        if (other.workspacePath && other.workspace !== "inherit") {
+          await this.workspace
+            .cleanupWorkspace(
+              swarm.rootDirectory,
+              other.workspacePath,
+              other.branchName,
+            )
+            .catch(() => {});
+        }
+      }
+      this.store.deleteSwarm(swarm.swarmId);
+      return;
+    }
+
     this.store.updateMember(swarm.swarmId, member.name, {
       state: "killed",
       waitingSinceSeq: undefined,
@@ -932,6 +996,14 @@ export class SwarmDispatcher {
         )
         .catch(() => {});
     }
+    const liveSwarm = this.store.getSwarm(swarm.swarmId) ?? swarm;
+    await this.runtime.syntheticMessage({
+      sessionID: liveSwarm.coordinatorSessionID,
+      text: `[mSwarm] Removed @${member.name} (session deleted). Active: ${activeMembersSummary(
+        liveSwarm,
+      )}.`,
+      description: "mSwarm worker session deleted",
+    });
   }
 
   private async wakeMember(

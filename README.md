@@ -13,6 +13,13 @@ message board, targeted wakeups, git worktree isolation, and an event-driven wai
 
 - **Swarm mode built into the mode switcher** - after installation, press **Shift+Tab** until the **swarm** agent
   appears, then describe the goal. No slash command required. `/mswarm <goal>` also works from Build or Plan.
+- **Coordinator-first delegation** - the coordinator stays the single point of entry, answers the user first, and
+  delegates implementation, investigation, verification, and follow-up work to workers.
+- **Visible swarm activity** - spawn, kill, failure, and live roster notices are added to the coordinator transcript,
+  so you can see what is running and what each worker owns.
+- **Lazy state and cleanup** - entering Swarm mode or asking a meta question writes nothing to disk. State is created
+  only when a worker is actually spawned, and `/mswarm kill` or closing the coordinator session removes the swarm
+  state and prunes empty `.opencode/mswarm` directories.
 - **Selected-model inheritance** - workers inherit the model selected for the session unless a per-worker or
   per-swarm model is chosen.
 - **Zero-polling `swarm_wait`** - workers park without burning tokens, then wake through OpenCode's
@@ -123,13 +130,15 @@ OpenCode watches configuration and plugin changes; use `/reload` if a rebuild is
    Refactor the auth module, add tests, and update the API docs.
    ```
 
-3. The coordinator plans the work, spawns workers, and reports back when the swarm finishes or is blocked.
+3. The coordinator answers first, then delegates. Workers are child sessions; press **Down** to open the subagent
+   picker and inspect one. The coordinator transcript also shows `[mSwarm]` spawn, kill, failure, and live-roster
+   notices.
 
 ### Slash commands
 
 - `/mswarm <goal>` - initialize a swarm in the current session and start coordinating.
 - `/mswarm board` - show members, states, channels, and recent board messages.
-- `/mswarm kill` - abort and clean up active workers in the current swarm.
+- `/mswarm kill` - abort active workers, remove the swarm state, and prune empty mSwarm directories.
 
 ### Switching models
 
@@ -182,7 +191,8 @@ Event-driven wakeup
     with the unread messages; no timers or polling loops
 ```
 
-1. **Swarm mode** creates the coordinator record on the first model request. `/mswarm` does the same from any mode.
+1. **Swarm mode** adds the coordinator contract at request time. It does not create state or workers by itself: the
+   first `swarm add` creates the swarm on disk. `/mswarm <goal>` creates it explicitly from any mode.
 2. **The board** records an append-only sequence of `#seq` messages, members, channels, and read/post watermarks.
    State is written atomically (write, fsync, rename) with retries for transient Windows file locks.
 3. **Workers** are created as independent OpenCode sessions, optionally isolated in git worktrees, and started with a
@@ -232,6 +242,12 @@ needed.
   fast; read watermarks are advanced when old messages are pruned.
 - Workers report `[done]`, `[blocked]`, and `[error]` to their parent. The coordinator is woken by these reports only
   when it is actually idle.
+- Entering Swarm mode or asking a meta question does not create `.opencode` state. State appears only when a worker is
+  actually spawned.
+- `/mswarm kill` removes the swarm state and prunes empty `.opencode/mswarm` directories after cleaning worktrees.
+- Closing/deleting the coordinator session also cleans its worktrees and swarm state.
+- Spawn, kill, failure, and live-roster notices are synthetic transcript messages; they are best-effort and never block
+  the swarm.
 
 ---
 
@@ -246,8 +262,10 @@ needed.
       <memberName>/     # optional isolated workspaces
 ```
 
-State is local to the project and can be deleted when no swarm is running. The plugin reloads existing state at
-startup, so a restart does not lose the roster or board.
+State is created lazily when a worker is spawned (or `/mswarm <goal>` is used) and is local to the project. It is
+removed by `/mswarm kill` or when the coordinator session is deleted. Empty `mswarm` and `.opencode` directories are
+pruned automatically. The plugin reloads existing state at startup, so a restart does not lose an active roster or
+board.
 
 ---
 

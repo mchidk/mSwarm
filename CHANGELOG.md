@@ -13,6 +13,15 @@ All notable changes to mSwarm.
 - Added the selectable **swarm** primary agent (Shift+Tab) with subagent delegation disabled in favor of mSwarm workers.
 - The plugin now loads under OpenCode 2.3.0; the previous entrypoint was rejected by the V2 loader.
 
+### Coordinator and visibility
+
+- The coordinator prompt now makes the coordinator the single point of entry: answer the user first, delegate all
+  non-trivial work and follow-ups, and never block on a wait while a user request is pending.
+- Added live roster and spawn/kill/failure notices to the coordinator transcript.
+- Swarm state is created lazily on the first worker spawn; entering Swarm mode or asking a meta question leaves no
+  `.opencode` state.
+- `/mswarm kill` and coordinator-session deletion remove swarm state and prune empty mSwarm directories.
+
 ### Reliability
 
 - Wakeups now use `session.execution.succeeded` (plus failed/interrupted events) because `session.idle` is not

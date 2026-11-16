@@ -53,6 +53,11 @@ describe("SwarmDispatcher", () => {
       assert.deepEqual(session.model, MODEL);
     }
     assert.equal(runtime.prompts.length, 3);
+    assert.ok(
+      runtime.syntheticMessages.some((message) =>
+        /Spawned @researcher/.test(message.text),
+      ),
+    );
   });
 
   it("marks the initial brief read so session.idle does not re-deliver it", async () => {
@@ -158,6 +163,11 @@ describe("SwarmDispatcher", () => {
     assert.equal(killed.length, 1);
     assert.equal(killed[0]?.state, "killed");
     assert.ok(runtime.interrupted.includes(worker.sessionID));
+    assert.ok(
+      runtime.syntheticMessages.some((message) =>
+        /Killed @worker-1/.test(message.text),
+      ),
+    );
   });
 
   it("parks, wakes, and retries failed wakeups without losing messages", async () => {
