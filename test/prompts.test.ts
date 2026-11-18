@@ -51,11 +51,42 @@ describe("coordinator prompt", () => {
 
   it("requires self-contained briefs and integration before kill", () => {
     const text = buildCoordinatorPrompt(swarm(), coordinator);
-    assert.match(text, /Workers cannot see this conversation/);
-    assert.match(text, /Two workers must never own the same file/);
+    assert.match(text, /workers cannot see this conversation/);
+    assert.match(text, /Two workers never own the same file/);
     assert.match(text, /Integrate before killing them/);
     assert.match(text, /discards uncommitted changes/);
     assert.match(text, /Channels: #main$/m, "archived channels are hidden");
+  });
+
+  it("triages before delegating, in a fixed order", () => {
+    const text = buildCoordinatorPrompt(swarm(), coordinator);
+    const steps = ["1. Answer:", "2. Do it yourself:", "3. Route:", "4. Scout first:", "5. Delegate:"];
+    const positions = steps.map((step) => text.indexOf(step));
+    assert.ok(positions.every((position) => position >= 0), "every triage step is present");
+    assert.deepEqual([...positions].sort((a, b) => a - b), positions);
+    assert.match(text, /Do not split work you have not seen/);
+  });
+
+  it("decomposes by ownership and sizes by independent units", () => {
+    const text = buildCoordinatorPrompt(swarm(), coordinator);
+    assert.match(text, /Split by ownership \(files or modules\), not by phase/);
+    assert.match(text, /an interface and its callers/);
+    assert.match(text, /Size the team by independent units, not by a target number/);
+  });
+
+  it("gives briefs a fixed shape", () => {
+    const text = buildCoordinatorPrompt(swarm(), coordinator);
+    for (const field of ["Goal:", "Context:", "You own:", "Do not touch:", "Done when:", "Report:"]) {
+      assert.ok(text.includes(field), field);
+    }
+  });
+
+  it("treats [done] as a claim and handles blocked and failed workers", () => {
+    const text = buildCoordinatorPrompt(swarm(), coordinator);
+    assert.match(text, /`\[done\]` is a claim, not evidence/);
+    assert.match(text, /did not write the code/);
+    assert.match(text, /On `\[blocked\]`: answer from what you know/);
+    assert.match(text, /Never resend the same brief/);
   });
 
   it("describes the scout only when auto-delegation is enabled", () => {
@@ -64,7 +95,8 @@ describe("coordinator prompt", () => {
       autoDelegate: true,
     });
     assert.match(text, /read-only scout \(`@auto-N`\)/);
-    assert.match(text, /Do not spawn a duplicate investigation/);
+    assert.match(text, /do not spawn a duplicate investigation/);
+    assert.match(text, /If the request was step 1 or 2, handle it and kill the scout/);
   });
 
   it("is identical across turns for the same swarm (cache-friendly)", () => {

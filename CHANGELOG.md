@@ -8,6 +8,11 @@ All notable changes to mSwarm.
 
 ### Prompts
 
+- The coordinator now triages every message before acting: answer, do it yourself, route to the worker that owns the
+  area, scout first when it cannot yet name the files involved, or delegate. It splits work by file ownership rather
+  than by phase, sizes the team by independent units, writes briefs in a fixed shape (Goal / Context / You own /
+  Do not touch / Done when / Report), treats a worker's `[done]` as a claim to check, and has explicit rules for
+  `[blocked]` and failed workers.
 - The coordinator prompt now requires self-contained briefs (workers cannot see the conversation), forbids two workers
   owning the same file, and explains integration: merge `branch` workers, cherry-pick `share` SHAs, then kill.
 - Worker prompts interpolate the real parent name in `[done]`/`[blocked]` instructions, tell isolated workers to commit
