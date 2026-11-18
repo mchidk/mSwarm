@@ -2,10 +2,16 @@ import { Plugin } from "@opencode/plugin";
 import type { Context as PluginContext } from "@opencode/plugin/promise/plugin";
 import type { CommandInvocation } from "@opencode/plugin/promise/command";
 import { SwarmDispatcher } from "./dispatcher.js";
-import { buildCoordinatorPrompt, buildWorkerPrompt } from "./prompts.js";
+import {
+  AUTO_SCOUT_PREFIX,
+  buildCoordinatorPrompt,
+  buildScoutBrief,
+  buildWorkerPrompt,
+} from "./prompts.js";
+import { looksSubstantive } from "./intent.js";
 import { OpenCodeRuntime } from "./runtime.js";
 import { SwarmStore } from "./store.js";
-import { createSwarmTools } from "./tools.js";
+import { SWARM_TOOL_NAMES, createSwarmTools } from "./tools.js";
 import type { ModelRef, SwarmMember, SwarmState } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
 
@@ -66,39 +72,8 @@ function findBrief(
   return firstMention?.text;
 }
 
-/**
- * Whether a user prompt is substantial enough to start a first-responder
- * worker. This is intentionally conservative for short status/meta questions.
- */
-function looksSubstantive(text: string): boolean {
-  const clean = text.trim();
-  if (!clean) {
-    return false;
-  }
-  if (clean.startsWith("/")) {
-    return false;
-  }
-  if (/^\[swarm wakeup/i.test(clean)) {
-    return false;
-  }
-  if (/^(hi|hello|hey|thanks|thank you)\b/i.test(clean) && clean.length < 60) {
-    return false;
-  }
-  if (/^(is|are) (it|this|the swarm|mswarm)\b/i.test(clean)) {
-    return false;
-  }
-  if (/^(what|which) (color|model|version|status)\b/i.test(clean)) {
-    return false;
-  }
-  if (/^(show|tell me) (the )?(status|board|roster)\b/i.test(clean)) {
-    return false;
-  }
-  if (clean.length >= 80) {
-    return true;
-  }
-  return /\b(review|analy|port|research|investigat|fix|correct|implement|build|add|change|update|test|write|create|compare|explain|plan|design|refactor|clean|install|commit|debug|optimi|improve|find|check|make)\b/i.test(
-    clean,
-  );
+function isSwarmAgentId(agent: string | undefined): boolean {
+  return agent === "swarm" || agent === "mswarm";
 }
 
 /**
@@ -251,12 +226,19 @@ async function handleCommand(
     store.setTitle(swarm.swarmId, args.slice(0, 80));
   }
 
-  const taskText =
-    args ||
-    "Swarm initialized. Ask the user what goal they would like the team to work on, or check board status.";
+  if (!args) {
+    // A plugin instruction, not a user request: it must not start a scout.
+    await ctx.session.prompt({
+      sessionID: invocation.sessionID,
+      text: "Swarm initialized. Ask the user what goal they would like the team to work on, or check board status.",
+      delivery: invocation.delivery ?? "queue",
+      metadata: { mswarmControl: true },
+    });
+    return;
+  }
   await ctx.session.prompt({
     sessionID: invocation.sessionID,
-    text: taskText,
+    text: args,
     ...(invocation.prompt.files ? { files: invocation.prompt.files } : {}),
     ...(invocation.prompt.agents ? { agents: invocation.prompt.agents } : {}),
     ...(invocation.prompt.skills ? { skills: invocation.prompt.skills } : {}),
@@ -301,72 +283,94 @@ export default Plugin.define({
       }
     };
 
+    // Sessions with a scout spawn in flight, so two quick prompts cannot both
+    // start one before the first is registered.
+    const pendingScouts = new Map<string, string>();
+
     /**
-     * Starts one first-responder worker for a substantive prompt. This is
-     * fire-and-forget so it never delays the coordinator's first token.
+     * Decides, before the coordinator's model call, whether a new request
+     * gets a read-only scout, and reserves its name. Scouts are started only
+     * when no workers are active: follow-ups depend on conversation context a
+     * worker cannot see, so the coordinator routes those itself.
      */
-    const maybeAutoDelegate = async (
-      sessionID: string,
-      text: string,
-    ): Promise<void> => {
-      let swarmCtx = store.getSwarmBySession(sessionID);
-      if (swarmCtx && swarmCtx.member.role !== "coordinator") {
-        return;
+    const planScout = async (sessionID: string): Promise<string | undefined> => {
+      if (pendingScouts.has(sessionID)) {
+        return undefined;
       }
-
-      let agent = sessionAgents.get(sessionID);
-      if (!swarmCtx && !agent) {
-        agent = await getSessionAgent(sessionID);
-      }
-      const isSwarmAgent = agent === "swarm" || agent === "mswarm";
-      if (!swarmCtx && !isSwarmAgent) {
-        return;
-      }
-
-      if (!swarmCtx) {
-        const model = await dispatcher.resolveSelectedModel(sessionID);
-        store.createOrGetSwarm(sessionID, rootDir, model);
-        swarmCtx = store.getSwarmBySession(sessionID);
-      }
-      if (!swarmCtx) {
-        return;
-      }
-
-      const working = Object.values(swarmCtx.swarm.members).filter(
-        (member) =>
-          member.role !== "coordinator" && member.state === "working",
-      ).length;
-      if (working >= 3) {
-        return;
+      const swarmCtx = store.getSwarmBySession(sessionID);
+      if (swarmCtx) {
+        if (swarmCtx.member.role !== "coordinator") {
+          return undefined;
+        }
+        const active = Object.values(swarmCtx.swarm.members).some(
+          (member) => member.role !== "coordinator" && member.state !== "killed",
+        );
+        if (active) {
+          return undefined;
+        }
+      } else {
+        // Usually cached by the context hook or agent events. A cold lookup
+        // runs inside prompt admission, so never let it stall the prompt.
+        const agent = await Promise.race([
+          getSessionAgent(sessionID),
+          new Promise<undefined>((resolve) => {
+            setTimeout(() => resolve(undefined), 1_000).unref?.();
+          }),
+        ]);
+        if (!isSwarmAgentId(agent)) {
+          return undefined;
+        }
       }
 
       let index = 1;
-      while (store.getMember(swarmCtx.swarm.swarmId, `auto-${index}`)) {
+      while (
+        swarmCtx &&
+        store.getMember(swarmCtx.swarm.swarmId, `${AUTO_SCOUT_PREFIX}-${index}`)
+      ) {
         index++;
       }
-      const name = `auto-${index}`;
-      const brief = [
-        "You are the coordinator's first responder for the user's latest request.",
-        "If this is analysis, review, research, or a question, investigate and report findings without editing files.",
-        "If it requires changes, implement them in the shared workspace, run focused checks, and report files changed and tests run.",
-        "Post `@coordinator [done] <summary>` when complete, or `@coordinator [blocked] <details>` if blocked.",
-        "",
-        "User request:",
-        text,
-      ].join("\n");
+      return `${AUTO_SCOUT_PREFIX}-${index}`;
+    };
 
-      const result = await dispatcher.addWorkers(sessionID, {
-        name,
-        brief,
-        workspace: "inherit",
-        role: "worker",
-      });
-      if (result.created.length === 0) {
-        console.error(
-          `[opencode-mswarm] auto-delegation failed: ${result.failures
-            .map((failure) => `${failure.name}: ${failure.error}`)
-            .join("; ")}`,
-        );
+    /**
+     * Spawns the reserved scout. Runs in the background so it never delays
+     * the coordinator's first token.
+     */
+    const startScout = async (
+      sessionID: string,
+      name: string,
+      text: string,
+    ): Promise<void> => {
+      if (!store.getSwarmBySession(sessionID)) {
+        const model = await dispatcher.resolveSelectedModel(sessionID);
+        store.createOrGetSwarm(sessionID, rootDir, model);
+      }
+      let failure: string | undefined;
+      try {
+        const result = await dispatcher.addWorkers(sessionID, {
+          name,
+          brief: buildScoutBrief(text),
+          workspace: "inherit",
+          role: "worker",
+        });
+        if (result.created.length === 0) {
+          failure = result.failures
+            .map((item) => `${item.name}: ${item.error}`)
+            .join("; ");
+        }
+      } catch (error) {
+        failure = error instanceof Error ? error.message : String(error);
+      }
+      if (failure) {
+        console.error(`[opencode-mswarm] scout start failed: ${failure}`);
+        // The user message already announced the scout; correct it.
+        await runtime
+          .syntheticMessage({
+            sessionID,
+            text: `[mSwarm] Could not start scout @${name}: ${failure}. Spawn workers directly.`,
+            description: "mSwarm scout failed",
+          })
+          .catch(() => {});
       }
     };
 
@@ -389,7 +393,7 @@ export default Plugin.define({
 
     // Any admitted prompt means the session is active. This keeps the roster
     // accurate when a user talks to the coordinator while workers are running.
-    await ctx.session.hook("prompt", (event) => {
+    await ctx.session.hook("prompt", async (event) => {
       store.markWorking(event.sessionID);
       if (!autoDelegateEnabled) {
         return;
@@ -408,12 +412,34 @@ export default Plugin.define({
         return;
       }
       autoSeen.set(event.sessionID, { text, at: now });
-      void maybeAutoDelegate(event.sessionID, text).catch((error) => {
+
+      let name: string | undefined;
+      try {
+        name = await planScout(event.sessionID);
+      } catch (error) {
         console.error(
-          "[opencode-mswarm] auto-delegate failed:",
+          "[opencode-mswarm] scout planning failed:",
           error instanceof Error ? error.message : error,
         );
-      });
+      }
+      if (!name) {
+        return;
+      }
+      pendingScouts.set(event.sessionID, name);
+      // Tell the coordinator in the same turn, inside the user message (not
+      // the system prompt) so the note stays in history and caching holds.
+      event.prompt.text = `${event.prompt.text}\n\n[mSwarm] Started read-only scout @${name} on this request; it will report to @coordinator.`;
+      const sessionID = event.sessionID;
+      void startScout(sessionID, name, text)
+        .catch((error) => {
+          console.error(
+            "[opencode-mswarm] scout start failed:",
+            error instanceof Error ? error.message : error,
+          );
+        })
+        .finally(() => {
+          pendingScouts.delete(sessionID);
+        });
     });
 
     // Inject the coordinator/worker contract immediately before each model call.
@@ -426,10 +452,18 @@ export default Plugin.define({
       const swarmCtx = store.getSwarmBySession(event.sessionID);
       const agentID = String(event.agent).toLowerCase();
       sessionAgents.set(event.sessionID, agentID);
-      const isSwarmMode = agentID === "swarm" || agentID === "mswarm";
+      const isSwarmMode = isSwarmAgentId(agentID);
 
       if (!swarmCtx) {
         if (!isSwarmMode) {
+          // Ordinary Build/Plan sessions do not pay for (or stumble into)
+          // the swarm tools. `/mswarm` creates the swarm before its first
+          // request, so the tools reappear there.
+          if (event.tools) {
+            for (const name of SWARM_TOOL_NAMES) {
+              delete event.tools[name];
+            }
+          }
           return;
         }
         // Do not create state just because Swarm mode is selected. Meta
@@ -441,7 +475,9 @@ export default Plugin.define({
         );
         event.system.push({
           type: "text",
-          text: buildCoordinatorPrompt(transient.swarm, transient.member),
+          text: buildCoordinatorPrompt(transient.swarm, transient.member, {
+            autoDelegate: autoDelegateEnabled,
+          }),
         });
         return;
       }
@@ -450,7 +486,9 @@ export default Plugin.define({
       if (swarmCtx.member.role === "coordinator") {
         event.system.push({
           type: "text",
-          text: buildCoordinatorPrompt(swarmCtx.swarm, swarmCtx.member),
+          text: buildCoordinatorPrompt(swarmCtx.swarm, swarmCtx.member, {
+            autoDelegate: autoDelegateEnabled,
+          }),
         });
       } else {
         const brief =

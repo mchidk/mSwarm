@@ -384,4 +384,39 @@ describe("SwarmDispatcher", () => {
       "the parent should be woken by the error report",
     );
   });
+  it("starts workers with a short kickoff instead of repeating the brief", async () => {
+    store.createOrGetSwarm("coord-1", tmpDir, MODEL);
+    const brief = "Implement the parser. " + "Context. ".repeat(200);
+    const [worker] = (
+      await dispatcher.addWorkers("coord-1", { name: "alice", brief })
+    ).created;
+    assert.ok(worker);
+    const kickoff = runtime.prompts[runtime.prompts.length - 1]?.text ?? "";
+    assert.match(kickoff, /\[swarm kickoff for @alice\]/);
+    assert.match(kickoff, /posted as #1/);
+    assert.doesNotMatch(kickoff, /Implement the parser/);
+  });
+
+  it("does not replay already delivered messages when swarm_wait gets since 0", async () => {
+    const swarm = store.createOrGetSwarm("coord-1", tmpDir, MODEL);
+    const [worker] = (
+      await dispatcher.addWorkers("coord-1", { name: "alice", brief: "Do it" })
+    ).created;
+    assert.ok(worker);
+
+    const parked = dispatcher.waitForBoard(worker.sessionID, 0);
+    assert.equal(parked.status, "parked", "the brief must not come back");
+    assert.equal(
+      store.getMember(swarm.swarmId, "alice")?.waitingSinceSeq,
+      1,
+    );
+
+    store.postMessage(swarm.swarmId, "coordinator", "@alice new info");
+    const result = dispatcher.waitForBoard(worker.sessionID, 0);
+    assert.equal(result.status, "messages");
+    assert.deepEqual(
+      result.status === "messages" ? result.messages.map((m) => m.seq) : [],
+      [2],
+    );
+  });
 });

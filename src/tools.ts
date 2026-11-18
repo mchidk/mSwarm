@@ -12,6 +12,14 @@ import type { SwarmStore } from "./store.js";
  * Author: Michael Christensen
  */
 
+/** Names of the tools this plugin registers. */
+export const SWARM_TOOL_NAMES = [
+  "swarm",
+  "post_message",
+  "read_board",
+  "swarm_wait",
+] as const;
+
 function toJson(payload: unknown): string {
   return JSON.stringify(payload, null, 2);
 }

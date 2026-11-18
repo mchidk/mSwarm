@@ -1219,6 +1219,38 @@ export class SwarmStore {
   }
 
   /**
+   * Returns the new read watermark after `member` has seen `returned`, or
+   * undefined when it does not move. The watermark only advances across
+   * unread messages that would wake the member; it stops before the first
+   * such message that was not returned (for example one cut off by `limit`,
+   * or one on another channel), so a partial read never swallows a wakeup.
+   */
+  private advancedReadSeq(
+    swarm: StoredSwarmState,
+    member: StoredSwarmMember,
+    returned: BoardMessage[],
+  ): number | undefined {
+    const current = member.lastReadSeq ?? 0;
+    const returnedSeqs = new Set(returned.map((message) => message.seq));
+    const maxReturned = Math.max(...returnedSeqs);
+    if (maxReturned <= current) {
+      return undefined;
+    }
+    const firstMissed = this.getMatchingMessages(
+      swarm,
+      member,
+      current,
+      member.wakeMode !== "all",
+    ).find(
+      (message) => message.seq <= maxReturned && !returnedSeqs.has(message.seq),
+    );
+    const next = firstMissed
+      ? Math.min(maxReturned, firstMissed.seq - 1)
+      : maxReturned;
+    return next > current ? next : undefined;
+  }
+
+  /**
    * Reads board messages or member status for a member.
    */
   readBoard(
@@ -1293,9 +1325,9 @@ export class SwarmStore {
     }
 
     if (messages.length > 0) {
-      const maxSeq = messages[messages.length - 1]!.seq;
-      if (member.lastReadSeq === undefined || maxSeq > member.lastReadSeq) {
-        member.lastReadSeq = maxSeq;
+      const next = this.advancedReadSeq(swarm, member, messages);
+      if (next !== undefined) {
+        member.lastReadSeq = next;
         this.persist(swarm);
       }
     }

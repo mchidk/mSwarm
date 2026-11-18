@@ -602,4 +602,121 @@ describe("MSwarmPlugin (OpenCode 2.x)", () => {
     await cleanup?.();
     mock.events.close();
   });
+  it("does not start a scout for a bare /mswarm", async () => {
+    const mock = createMockContext(tmpDir, model, { autoDelegate: true });
+    const cleanup = await MSwarmPlugin.setup(mock.ctx as never);
+    mock.sessions.set("bare", {
+      id: "bare",
+      agent: "swarm",
+      model,
+      location: { directory: tmpDir },
+    });
+    const command = mock.commands.find((candidate) => candidate.name === "mswarm");
+    assert.ok(command);
+    await command.execute({ sessionID: "bare", prompt: { text: "" }, delivery: "queue" });
+    await flush();
+
+    const ctx = new SwarmStore(tmpDir).getSwarmBySession("bare");
+    assert.ok(ctx);
+    assert.deepEqual(Object.keys(ctx.swarm.members), ["coordinator"]);
+    assert.equal(
+      (mock.prompts[0] as { metadata?: Record<string, unknown> }).metadata?.mswarmControl,
+      true,
+    );
+
+    await cleanup?.();
+    mock.events.close();
+  });
+
+  it("announces a read-only scout in the request and skips it while workers are active", async () => {
+    const mock = createMockContext(tmpDir, model, { autoDelegate: true });
+    const cleanup = await MSwarmPlugin.setup(mock.ctx as never);
+    mock.sessions.set("scout-session", {
+      id: "scout-session",
+      agent: "swarm",
+      model,
+      location: { directory: tmpDir },
+    });
+    const promptHook = mock.hooks.prompt?.[0];
+    assert.ok(promptHook);
+
+    const first = {
+      sessionID: "scout-session",
+      prompt: { text: "analyze the auth flow" },
+      metadata: {},
+      delivery: "queue",
+    };
+    await promptHook(first);
+    assert.match(first.prompt.text, /^analyze the auth flow\n\n\[mSwarm\] Started read-only scout @auto-1/);
+
+    await waitUntil(() => {
+      const store = new SwarmStore(tmpDir);
+      const ctx = store.getSwarmBySession("scout-session");
+      return Boolean(ctx && store.getMember(ctx.swarm.swarmId, "auto-1"));
+    });
+    const store = new SwarmStore(tmpDir);
+    const ctx = store.getSwarmBySession("scout-session");
+    assert.ok(ctx);
+    const scout = store.getMember(ctx.swarm.swarmId, "auto-1");
+    assert.match(scout?.brief ?? "", /read-only scout/);
+    assert.match(scout?.brief ?? "", /User request:\nanalyze the auth flow$/);
+
+    // A follow-up while the scout is active is routed by the coordinator.
+    const followUp = {
+      sessionID: "scout-session",
+      prompt: { text: "make it blue" },
+      metadata: {},
+      delivery: "queue",
+    };
+    await promptHook(followUp);
+    await flush();
+    assert.equal(followUp.prompt.text, "make it blue");
+    assert.equal(
+      Object.keys(new SwarmStore(tmpDir).getSwarmBySession("scout-session")!.swarm.members)
+        .filter((name) => name.startsWith("auto-")).length,
+      1,
+    );
+
+    const system: Array<{ type: string; text: string }> = [];
+    await mock.hooks.context![0]!({
+      sessionID: "scout-session",
+      agent: "swarm",
+      system,
+    });
+    assert.match(system[0]?.text ?? "", /read-only scout/);
+
+    await cleanup?.();
+    mock.events.close();
+  });
+
+  it("hides swarm tools from sessions outside Swarm mode", async () => {
+    const mock = createMockContext(tmpDir, model);
+    const cleanup = await MSwarmPlugin.setup(mock.ctx as never);
+    const toolSet = () => ({
+      swarm: { description: "", input: {} },
+      post_message: { description: "", input: {} },
+      read_board: { description: "", input: {} },
+      swarm_wait: { description: "", input: {} },
+      read: { description: "", input: {} },
+    });
+
+    const build = { sessionID: "plain", agent: "build", system: [], tools: toolSet() };
+    await mock.hooks.context![0]!(build);
+    assert.deepEqual(Object.keys(build.tools), ["read"]);
+
+    const swarmMode = { sessionID: "mode", agent: "swarm", system: [], tools: toolSet() };
+    await mock.hooks.context![0]!(swarmMode);
+    assert.equal(Object.keys(swarmMode.tools).length, 5);
+
+    // /mswarm from Build creates the swarm first, so the tools stay.
+    const command = mock.commands.find((candidate) => candidate.name === "mswarm");
+    assert.ok(command);
+    await command.execute({ sessionID: "coord-1", prompt: { text: "Build X" }, delivery: "queue" });
+    const viaCommand = { sessionID: "coord-1", agent: "build", system: [], tools: toolSet() };
+    await mock.hooks.context![0]!(viaCommand);
+    assert.equal(Object.keys(viaCommand.tools).length, 5);
+
+    await cleanup?.();
+    mock.events.close();
+  });
 });

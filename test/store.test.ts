@@ -253,4 +253,39 @@ describe("SwarmStore", () => {
     assert.equal(status.lastReadSeq, 3);
     assert.equal(status.lastPostSeq, 3);
   });
+  it("does not mark unread mentions as read when a read skips them", () => {
+    const store = new SwarmStore(tmpDir);
+    const swarm = store.createOrGetSwarm("sess-coord", tmpDir);
+    store.addMember(swarm.swarmId, {
+      name: "alice",
+      role: "worker",
+      state: "working",
+      sessionID: "sess-alice",
+      workspace: "inherit",
+      wakeMode: "mentions_only",
+      channels: ["main", "ops"],
+    });
+    store.createChannel(swarm.swarmId, "ops", "", "coordinator");
+    store.subscribeChannel(swarm.swarmId, "ops", "alice");
+
+    store.postMessage(swarm.swarmId, "coordinator", "@alice first");
+    store.postMessage(swarm.swarmId, "coordinator", "@alice second");
+    store.postMessage(swarm.swarmId, "coordinator", "@alice third");
+
+    // Latest-1 view: #1 and #2 were never shown, so they stay unread.
+    store.readBoard(swarm.swarmId, "alice", { limit: 1 });
+    assert.equal(store.getMember(swarm.swarmId, "alice")?.lastReadSeq ?? 0, 0);
+
+    store.readBoard(swarm.swarmId, "alice", { since: 0, limit: 2 });
+    assert.equal(store.getMember(swarm.swarmId, "alice")?.lastReadSeq, 2);
+
+    // A channel-filtered read must not skip an unread mention on main.
+    store.postMessage(swarm.swarmId, "coordinator", "@alice on main");
+    store.postMessage(swarm.swarmId, "coordinator", "@alice on ops", "ops");
+    store.readBoard(swarm.swarmId, "alice", { channel: "ops" });
+    assert.equal(store.getMember(swarm.swarmId, "alice")?.lastReadSeq, 2);
+
+    store.readBoard(swarm.swarmId, "alice", { since: 2 });
+    assert.equal(store.getMember(swarm.swarmId, "alice")?.lastReadSeq, 5);
+  });
 });

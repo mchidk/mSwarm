@@ -15,10 +15,13 @@ message board, targeted wakeups, git worktree isolation, and an event-driven wai
   appears, then describe the goal. No slash command required. `/mswarm <goal>` also works from Build or Plan.
 - **Coordinator-first delegation** - the coordinator stays the single point of entry, answers the user first, and
   delegates implementation, investigation, verification, and follow-up work to workers.
-- **Automatic first responder** - substantive Swarm-mode prompts start one background worker immediately, without
-  delaying the coordinator's first response. Short status/meta questions stay direct.
-- **Concise coordinator prompt** - the coordinator prompt is intentionally short to minimize reasoning latency;
-  delegation is reinforced by the background first responder instead of a long instruction block.
+- **Automatic scout** - a substantive Swarm-mode request that arrives while no workers are active starts a read-only
+  `auto-N` scout in the background. The request is annotated with an `[mSwarm] Started read-only scout` line, so the
+  coordinator knows about it in the same turn and does not duplicate the investigation. Follow-ups are routed by the
+  coordinator, because a worker cannot see the conversation they depend on.
+- **Cache-friendly prompts** - coordinator and worker contracts are stable system prompts: briefs must stand alone,
+  isolated workers commit and report SHAs, and the coordinator integrates before killing. Per-turn facts (spawn
+  notices, kickoff, wakeups) travel as messages, so the system prompt does not change between turns.
 - **Visible swarm activity** - spawn, kill, failure, and live roster notices are added to the coordinator transcript,
   so you can see what is running and what each worker owns.
 - **Lazy state and cleanup** - entering Swarm mode or asking a meta question writes nothing to disk. State is created
@@ -98,7 +101,7 @@ The plugin adds the coordinator instructions at request time, so the agent entry
 
 ### Plugin options
 
-Automatic first-responder delegation is on by default. To disable it and have the coordinator decide when to spawn:
+The automatic scout is on by default. To disable it and have the coordinator decide when to spawn:
 
 ```jsonc
 {
@@ -111,8 +114,8 @@ Automatic first-responder delegation is on by default. To disable it and have th
 }
 ```
 
-For a local checkout, use the checkout path as `package`. Disabling auto-delegation restores purely coordinator-driven
-spawning.
+For a local checkout, use the checkout path as `package`. Disabling the scout restores purely coordinator-driven
+spawning, and the coordinator prompt no longer mentions it.
 
 ### Local development
 
@@ -197,6 +200,9 @@ swarm({
 `swarm` (`action: "add"`) accepts `workspace`, `role` (`worker` or `monitor`), `n`, `tasks`, `fork`, `channels`, and
 `model`.
 
+The tools are offered only to Swarm-mode sessions and to sessions that belong to a swarm (including one started with
+`/mswarm` from Build or Plan). Other sessions do not see them, so they cost no context tokens there.
+
 ---
 
 ## How it works
@@ -222,8 +228,10 @@ Event-driven wakeup
    first `swarm add` creates the swarm on disk. `/mswarm <goal>` creates it explicitly from any mode.
 2. **The board** records an append-only sequence of `#seq` messages, members, channels, and read/post watermarks.
    State is written atomically (write, fsync, rename) with retries for transient Windows file locks.
-3. **Workers** are created as independent OpenCode sessions, optionally isolated in git worktrees, and started with a
-   worker brief. Their initial brief is marked read immediately so a completed execution cannot re-deliver it.
+3. **Workers** are created as independent OpenCode sessions, optionally isolated in git worktrees. Their contract and
+   assignment are injected as the system prompt, and the first message is a short kickoff, so a long brief is not
+   repeated in the history. The brief is marked read immediately, and `swarm_wait` never goes below the read
+   watermark, so neither a completed execution nor `swarm_wait({ since: 0 })` re-delivers it.
 4. **Wakeups** are driven by `session.execution.succeeded`, `session.execution.failed`,
    `session.execution.interrupted`, `session.model.selected`, and `session.deleted` events. The read watermark
    advances only after a wake prompt is accepted, so a failed delivery is retried by the next post instead of being
@@ -235,14 +243,15 @@ Event-driven wakeup
 
 | Mode | Behavior |
 | :--- | :--- |
-| `inherit` | Worker uses the project root. Best for read-only reviewers and verifiers. |
+| `inherit` | Worker uses the project root. Best for read-only reviewers, verifiers, and a single editor. |
 | `share` | Detached git worktree from `HEAD`. Best for concurrent authors who do not need a named branch. |
 | `branch` | Git worktree on `mswarm/<swarmId>/<memberName>`. Best when each worker's changes should be reviewed or merged independently. |
 
 Worktrees live under `.opencode/mswarm/worktrees/` and are removed on `kill`. **Branches are preserved by default**, so
 committed worker changes remain available for review or merge after the worktree is cleaned up. Re-spawning a member
 with the same name uses a numbered branch suffix instead of deleting the earlier branch. Detached `share` worktrees
-have no branch, so integrate or commit their changes before killing the worker.
+have no branch: workers are told to commit and report the SHA, and the coordinator cherry-picks it before killing the
+worker. Kill force-removes the worktree, so uncommitted changes are lost.
 
 The state directory is git-ignored by default in this repository; add `.opencode/mswarm/` to your own `.gitignore` if
 needed.
@@ -267,6 +276,8 @@ needed.
 - Brief text is posted with an explicit mention scope, so `@mentions` inside a brief cannot wake unrelated workers.
 - Board messages are capped at 64 KB, and the board keeps the most recent 2,000 messages per swarm to keep writes
   fast; read watermarks are advanced when old messages are pruned.
+- `read_board` advances the read watermark only across messages it actually returned. A `limit`-truncated or
+  channel-filtered read never marks a skipped mention as read, so it still wakes the member.
 - Workers report `[done]`, `[blocked]`, and `[error]` to their parent. The coordinator is woken by these reports only
   when it is actually idle.
 - Entering Swarm mode or asking a meta question does not create `.opencode` state. State appears only when a worker is
@@ -275,10 +286,10 @@ needed.
 - Closing/deleting the coordinator session also cleans its worktrees and swarm state.
 - Spawn, kill, failure, and live-roster notices are synthetic transcript messages; they are best-effort and never block
   the swarm.
-- Automatic first-responder delegation is fire-and-forget, so it does not delay the coordinator's first token. It is
-  skipped for short status/meta prompts and capped at three concurrent auto-workers.
-- The coordinator prompt is intentionally concise. Repeated model-selection events do not rewrite state when the
-  provider/model/variant is unchanged.
+- The scout is decided before the coordinator's model call but spawned in the background, so it does not delay the
+  first token. It is skipped for short status/meta prompts, for `/mswarm` without a goal, and whenever workers are
+  already active. If it fails to start, a `[mSwarm] Could not start scout` notice corrects the announcement.
+- Repeated model-selection events do not rewrite state when the provider/model/variant is unchanged.
 
 ---
 
@@ -309,8 +320,8 @@ npm run build       # tsc -> dist/
 npm test            # node --test with the TypeScript resolve hook
 ```
 
-The test suite covers the store, dispatcher state machine, worktree lifecycle, CLI configuration migration, and the
-OpenCode 2.x plugin registration/tool/command/event wiring. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+The test suite covers the store, dispatcher state machine, worktree lifecycle, CLI configuration migration, prompt
+contracts, and the OpenCode 2.x plugin registration/tool/command/event wiring. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ---
 

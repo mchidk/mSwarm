@@ -1,4 +1,4 @@
-import { buildWakeupPrompt, buildWorkerPrompt } from "./prompts.js";
+import { buildWakeupPrompt, buildWorkerKickoff } from "./prompts.js";
 import type {
   AvailableModel,
   SessionRuntime,
@@ -442,6 +442,7 @@ export class SwarmDispatcher {
         this.sessionModels.set(sessionID, targetModel);
       }
 
+      let briefSeq: number | undefined;
       try {
         const posted = this.store.postMessage(
           swarm.swarmId,
@@ -455,6 +456,7 @@ export class SwarmDispatcher {
         this.store.updateMember(swarm.swarmId, member.name, {
           lastReadSeq: posted.message.seq,
         });
+        briefSeq = posted.message.seq;
       } catch (error) {
         warnings.push(
           `${spec.name}: failed to post brief to board: ${
@@ -465,14 +467,15 @@ export class SwarmDispatcher {
 
       const refreshed =
         this.store.getMember(swarm.swarmId, member.name) ?? member;
-      const basePrompt = buildWorkerPrompt(
-        this.store.getSwarm(swarm.swarmId) ?? swarm,
+      // The assignment and contract are injected as the worker's system
+      // prompt on every request (see the plugin's context hook), so the
+      // first user message only starts the work instead of repeating a brief
+      // of up to 32k characters in the history.
+      const promptText = buildWorkerKickoff(
         refreshed,
-        spec.brief,
+        briefSeq,
+        prepared.warning,
       );
-      const promptText = prepared.warning
-        ? `${basePrompt}\n\n[workspace notice] ${prepared.warning}`
-        : basePrompt;
 
       try {
         await this.runtime.promptSession({
@@ -785,8 +788,14 @@ export class SwarmDispatcher {
     const { swarm, member } = callerCtx;
     const wakeMode: WakeMode = mentionsOnly ? "mentions_only" : "all";
     // A model occasionally passes a future or stale seq. Treat anything past
-    // the head as "caught up" so the wait can still be woken by the next post.
-    const normalizedSince = Math.max(0, Math.min(since, swarm.headSeq));
+    // the head as "caught up" so the wait can still be woken by the next post,
+    // and never go below what was already delivered (for example the initial
+    // brief, or a wakeup batch), so `since: 0` does not replay old messages.
+    const normalizedSince = Math.max(
+      0,
+      Math.min(since, swarm.headSeq),
+      Math.min(member.lastReadSeq ?? 0, swarm.headSeq),
+    );
     const matching = this.store.getMatchingMessages(
       swarm,
       member,
