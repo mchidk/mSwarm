@@ -60,11 +60,22 @@ describe("coordinator prompt", () => {
 
   it("triages before delegating, in a fixed order", () => {
     const text = buildCoordinatorPrompt(swarm(), coordinator);
-    const steps = ["1. Answer:", "2. Do it yourself:", "3. Route:", "4. Scout first:", "5. Delegate:"];
+    const steps = ["1. Answer:", "2. Route:", "3. Scout first:", "4. Delegate:"];
     const positions = steps.map((step) => text.indexOf(step));
     assert.ok(positions.every((position) => position >= 0), "every triage step is present");
     assert.deepEqual([...positions].sort((a, b) => a - b), positions);
     assert.match(text, /Do not split work you have not seen/);
+    assert.doesNotMatch(text, /Do it yourself/, "the coordinator never takes on work itself");
+    assert.match(text, /Questions that need reading code go to a worker/);
+  });
+
+  it("optimizes for wall-clock time instead of doing work itself", () => {
+    const text = buildCoordinatorPrompt(swarm(), coordinator);
+    assert.match(text, /You are the serial bottleneck/);
+    assert.match(text, /even work you could do yourself/);
+    assert.match(text, /Spawn every unit that can start now in one turn/);
+    assert.match(text, /Act on each report as it arrives/);
+    assert.match(text, /Never take over the blocked work yourself/);
   });
 
   it("decomposes by ownership and sizes by independent units", () => {
@@ -85,18 +96,20 @@ describe("coordinator prompt", () => {
     const text = buildCoordinatorPrompt(swarm(), coordinator);
     assert.match(text, /`\[done\]` is a claim, not evidence/);
     assert.match(text, /did not write the code/);
-    assert.match(text, /On `\[blocked\]`: answer from what you know/);
+    assert.match(text, /On `\[blocked\]`: unblock with one short reply/);
+    assert.match(text, /If unblocking needs investigation, assign it/);
     assert.match(text, /Never resend the same brief/);
   });
 
   it("describes the scout only when auto-delegation is enabled", () => {
-    assert.doesNotMatch(buildCoordinatorPrompt(swarm(), coordinator), /scout/);
+    assert.doesNotMatch(buildCoordinatorPrompt(swarm(), coordinator), /@auto-N/);
     const text = buildCoordinatorPrompt(swarm(), coordinator, {
       autoDelegate: true,
     });
     assert.match(text, /read-only scout \(`@auto-N`\)/);
     assert.match(text, /do not spawn a duplicate investigation/);
-    assert.match(text, /If the request was step 1 or 2, handle it and kill the scout/);
+    assert.match(text, /If the request was step 1, answer it and kill the scout/);
+    assert.match(text, /It is your step 3/);
   });
 
   it("is identical across turns for the same swarm (cache-friendly)", () => {
