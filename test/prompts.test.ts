@@ -83,6 +83,16 @@ describe("coordinator prompt", () => {
     assert.match(text, /Split by ownership \(files or modules\), not by phase/);
     assert.match(text, /an interface and its callers/);
     assert.match(text, /Size the team by independent units, not by a target number/);
+    assert.match(text, /sharded with `tasks`, one worker per slice, up to about 8/);
+  });
+
+  it("spawns scouts by role and verifies once after merging", () => {
+    const text = buildCoordinatorPrompt(swarm(), coordinator);
+    assert.match(text, /`role: "scout"`/);
+    assert.match(text, /run the full checks once on the merged result/);
+    assert.match(text, /Do not re-run every worker's checks yourself/);
+    assert.doesNotMatch(text, /that is fast/);
+    assert.match(text, /schedule a dependency change as its own unit/);
   });
 
   it("gives briefs a fixed shape", () => {
@@ -175,12 +185,34 @@ describe("worker prompt", () => {
     assert.doesNotMatch(text, /Commit your changes/);
   });
 
-  it("gives monitors a pass/fail report format and no done/edit rules", () => {
+  it("keeps workers to the brief and asks for evidence in [done]", () => {
+    const text = buildWorkerPrompt(swarm(), member(), "Do X");
+    assert.match(text, /^Worker rules:$/m);
+    assert.match(text, /Do exactly the assignment/);
+    assert.match(text, /list them in your report instead of fixing them/);
+    assert.match(text, /report `\[blocked\]` early instead of guessing/);
+    assert.match(text, /each check command with its result/);
+    assert.match(text, /Do not install, remove, or upgrade packages/);
+    assert.doesNotMatch(text, /commit SHA/, "shared-root workers have no commits to report");
+  });
+
+  it("gives monitors verify-only rules that allow running checks", () => {
     const text = buildWorkerPrompt(swarm(), member({ role: "monitor" }), "Verify X");
-    assert.match(text, /`@lead \[pass\] <evidence>`/);
+    assert.match(text, /^Monitor rules:$/m);
+    assert.match(text, /Running tests, builds, typecheck, and lint is expected/);
+    assert.match(text, /`@lead \[pass\] <each check with its result>`/);
     assert.match(text, /`@lead \[fail\]/);
     assert.doesNotMatch(text, /\[done\]/);
-    assert.doesNotMatch(text, /Edit only the files/);
+    assert.doesNotMatch(text, /Worker rules|Edit only the files/);
+  });
+
+  it("gives scouts read-only rules and a units-ready-to-spawn report", () => {
+    const text = buildWorkerPrompt(swarm(), member({ role: "scout" }), "Scout X");
+    assert.match(text, /^Scout rules:$/m);
+    assert.match(text, /Read-only: do not edit files, commit, or install anything unless @lead/);
+    assert.match(text, /`name \| goal \| owns: <files> \| done when: <check command>`/);
+    assert.match(text, /Units must not share files/);
+    assert.doesNotMatch(text, /Worker rules|commit SHA/);
   });
 });
 
@@ -192,19 +224,24 @@ describe("worker kickoff", () => {
     assert.ok(text.length < 300);
   });
 
-  it("carries a workspace warning", () => {
+  it("carries workspace notices", () => {
+    const text = buildWorkerKickoff(member(), undefined, {
+      warning: "fell back",
+      linkedDependencies: ["node_modules", ".venv"],
+    });
+    assert.match(text, /\[workspace notice\] fell back/);
     assert.match(
-      buildWorkerKickoff(member(), undefined, "fell back"),
-      /\[workspace notice\] fell back/,
+      text,
+      /Linked from the root and shared with other workers: `node_modules`, `\.venv`/,
     );
   });
 });
 
 describe("scout brief", () => {
-  it("is read-only by default and includes the request", () => {
+  it("states the task and includes the request", () => {
     const text = buildScoutBrief("Refactor the store");
-    assert.match(text, /read-only scout/);
-    assert.match(text, /Do not edit files unless @coordinator/);
+    assert.match(text, /^Scout the user's latest request for @coordinator/);
+    assert.match(text, /propose how to split the work/);
     assert.match(text, /User request:\nRefactor the store$/);
   });
 });

@@ -541,7 +541,7 @@ describe("MSwarmPlugin (OpenCode 2.x)", () => {
     const ctx = store.getSwarmBySession("auto-session");
     assert.ok(ctx);
     assert.equal(ctx.member.role, "coordinator");
-    assert.equal(store.getMember(ctx.swarm.swarmId, "auto-1")?.role, "worker");
+    assert.equal(store.getMember(ctx.swarm.swarmId, "auto-1")?.role, "scout");
     assert.ok(
       mock.syntheticMessages.some((message) =>
         /Spawned @auto-1/.test(message.text),
@@ -658,7 +658,8 @@ describe("MSwarmPlugin (OpenCode 2.x)", () => {
     const ctx = store.getSwarmBySession("scout-session");
     assert.ok(ctx);
     const scout = store.getMember(ctx.swarm.swarmId, "auto-1");
-    assert.match(scout?.brief ?? "", /read-only scout/);
+    assert.equal(scout?.role, "scout");
+    assert.match(scout?.brief ?? "", /^Scout the user's latest request/);
     assert.match(scout?.brief ?? "", /User request:\nanalyze the auth flow$/);
 
     // A follow-up while the scout is active is routed by the coordinator.

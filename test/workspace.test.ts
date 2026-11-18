@@ -100,4 +100,40 @@ describe("WorkspaceManager", () => {
     const deleted = git(tmpDir, ["branch", "--list", "mswarm/sw1/brancher"]).trim();
     assert.equal(deleted, "");
   });
+
+  it("links ignored dependency folders and never deletes them on cleanup", async () => {
+    git(tmpDir, ["init"]);
+    git(tmpDir, ["config", "user.email", "test@example.com"]);
+    git(tmpDir, ["config", "user.name", "Test User"]);
+    // node_modules is ignored; venv is not, so it must not be linked.
+    fs.writeFileSync(path.join(tmpDir, ".gitignore"), "node_modules/\n", "utf8");
+    git(tmpDir, ["add", ".gitignore"]);
+    git(tmpDir, ["commit", "-m", "initial"]);
+    const pkg = path.join(tmpDir, "node_modules", "pkg", "index.js");
+    fs.mkdirSync(path.dirname(pkg), { recursive: true });
+    fs.writeFileSync(pkg, "module.exports = 1;\n", "utf8");
+    fs.mkdirSync(path.join(tmpDir, "venv"));
+
+    const branch = await manager.prepareWorkspace(tmpDir, "sw2", "deps", "branch");
+    assert.deepEqual(branch.linkedDependencies, ["node_modules"]);
+    const linked = path.join(branch.workspacePath, "node_modules");
+    assert.ok(fs.lstatSync(linked).isSymbolicLink());
+    assert.ok(fs.existsSync(path.join(linked, "pkg", "index.js")));
+    assert.equal(fs.existsSync(path.join(branch.workspacePath, "venv")), false);
+    assert.equal(
+      git(branch.workspacePath, ["status", "--porcelain"]).trim(),
+      "",
+      "the link must not show up as a change",
+    );
+
+    await manager.cleanupWorkspace(tmpDir, branch.workspacePath, branch.branchName, {
+      deleteBranch: true,
+    });
+    assert.ok(fs.existsSync(pkg), "the root node_modules must survive cleanup");
+    assert.equal(fs.existsSync(branch.workspacePath), false, "no leftover worktree folder");
+    assert.equal(
+      fs.existsSync(path.join(tmpDir, ".opencode", "mswarm", "worktrees")),
+      false,
+    );
+  });
 });

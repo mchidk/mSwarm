@@ -474,7 +474,7 @@ export class SwarmDispatcher {
       const promptText = buildWorkerKickoff(
         refreshed,
         briefSeq,
-        prepared.warning,
+        { warning: prepared.warning, linkedDependencies: prepared.linkedDependencies },
       );
 
       try {

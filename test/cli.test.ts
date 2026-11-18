@@ -67,6 +67,7 @@ describe("opencode-mswarm CLI", () => {
     assert.match(config.agents.swarm?.description ?? "", /mSwarm coordinator/);
     assert.deepEqual(config.agents.swarm?.permissions, [
       { action: "subagent", resource: "*", effect: "deny" },
+      { action: "edit", resource: "*", effect: "deny" },
     ]);
 
     const statusOut = runCli(["status"], tmpDir);
@@ -193,5 +194,39 @@ describe("opencode-mswarm CLI", () => {
     };
     assert.deepEqual(parsed.plugins, ["other-plugin", "opencode-mswarm"]);
     assert.equal(parsed.plugin, undefined);
+  });
+  it("upgrades an earlier mSwarm agent entry but never a customized one", () => {
+    const description =
+      "mSwarm coordinator: delegates work to parallel worker sessions with a shared board and isolated worktrees";
+    const cfgPath = path.join(tmpDir, "opencode.json");
+    const write = (agent: Record<string, unknown>) =>
+      fs.writeFileSync(
+        cfgPath,
+        JSON.stringify({ plugins: ["opencode-mswarm"], agents: { swarm: agent } }, null, 2),
+        "utf8",
+      );
+    const read = () =>
+      (JSON.parse(fs.readFileSync(cfgPath, "utf8")) as {
+        agents: { swarm: { permissions?: unknown[] } };
+      }).agents.swarm.permissions;
+
+    write({
+      description,
+      mode: "primary",
+      permissions: [{ action: "subagent", resource: "*", effect: "deny" }],
+    });
+    const out = runCli(["install", "--project"], tmpDir);
+    assert.match(out, /Updated the "swarm" agent's default permissions/);
+    assert.deepEqual(read(), [
+      { action: "subagent", resource: "*", effect: "deny" },
+      { action: "edit", resource: "*", effect: "deny" },
+    ]);
+
+    // Idempotent: a second install changes nothing.
+    assert.doesNotMatch(runCli(["install", "--project"], tmpDir), /Updated the "swarm"/);
+
+    write({ description: "my own coordinator", mode: "primary", permissions: [] });
+    runCli(["install", "--project"], tmpDir);
+    assert.deepEqual(read(), [], "a customized agent is left alone");
   });
 });

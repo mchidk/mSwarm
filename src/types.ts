@@ -24,7 +24,7 @@ export type MemberState = "waiting" | "working" | "stopped" | "killed";
 /**
  * Role of a member within the swarm.
  */
-export type MemberRole = "coordinator" | "worker" | "monitor";
+export type MemberRole = "coordinator" | "worker" | "scout" | "monitor";
 
 /**
  * Workspace isolation mode for a spawned worker.

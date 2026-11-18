@@ -26,7 +26,29 @@ All notable changes to mSwarm.
   that names the brief's `#seq`.
 - System prompts no longer change from turn to turn, which keeps prompt caching effective.
 
+- Workers, scouts, and monitors get role-specific rules. Workers do exactly the brief, list other problems instead of
+  fixing them, report `[blocked]` early when a brief looks wrong, never install packages into shared dependency
+  folders, and include each check command with its result in `[done]`. Scouts are read-only and report units ready to
+  spawn (`name | goal | owns | done when`). Monitors may run tests and builds but not edit source.
+- The coordinator spawns scouts with `role: "scout"` and spawns straight from their units. It shards independent
+  mechanical work with `tasks` (up to about 8 workers), runs the full checks once after merging instead of re-running
+  every worker's checks, and schedules dependency changes as their own unit.
+
+### Coordinator agent
+
+- `install` now denies the `swarm` agent file edits (`edit`, as OpenCode's Plan agent does) in addition to built-in
+  subagents, so delegation is enforced rather than only requested. Re-running `install` upgrades an agent entry it
+  wrote earlier; customized entries are left alone.
+
+### Worktrees
+
+- New `branch`/`share` worktrees get the root's git-ignored dependency folders (`node_modules`, `.venv`, `venv`)
+  linked in, so workers can run checks immediately. The links are removed before the worktree on cleanup. This also
+  fixes `git worktree remove` leaving the folder behind when it contains a junction.
+
 ### Automatic scout (was: first responder)
+
+- The scout now uses the new `scout` role.
 
 - The `auto-N` worker is now a read-only scout. Implementers come from the coordinator, so the two no longer edit the
   same files.

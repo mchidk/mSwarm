@@ -15,6 +15,8 @@ message board, targeted wakeups, git worktree isolation, and an event-driven wai
   appears, then describe the goal. No slash command required. `/mswarm <goal>` also works from Build or Plan.
 - **Coordinator-first delegation** - the coordinator stays the single point of entry, answers the user first, and
   delegates implementation, investigation, verification, and follow-up work to workers.
+- **Coordinator that cannot do the work itself** - the installed `swarm` agent is denied file edits and built-in
+  subagents, so it plans, delegates, merges, and checks, while workers implement in parallel.
 - **Automatic scout** - a substantive Swarm-mode request that arrives while no workers are active starts a read-only
   `auto-N` scout in the background. The request is annotated with an `[mSwarm] Started read-only scout` line, so the
   coordinator knows about it in the same turn and does not duplicate the investigation. Follow-ups are routed by the
@@ -90,12 +92,19 @@ Add the plugin and the Swarm agent to your `opencode.json(c)`:
       "mode": "primary",
       "color": "#8b5cf6",
       "permissions": [
-        { "action": "subagent", "resource": "*", "effect": "deny" }
+        { "action": "subagent", "resource": "*", "effect": "deny" },
+        { "action": "edit", "resource": "*", "effect": "deny" }
       ]
     }
   }
 }
 ```
+
+The two permissions make the coordinator delegate. It cannot use OpenCode's built-in subagents, and it cannot edit
+files (the same `edit` deny OpenCode's Plan agent uses). It keeps `bash` for `git merge`, `cherry-pick`, and running
+checks. Re-running `install` adds missing defaults to an agent entry it wrote earlier; an entry you customized (a
+different `description`) is left alone. Worker sessions run as OpenCode's default agent (normally Build), so they can
+still edit; do not make `swarm` your `default_agent`, or workers would inherit the edit deny.
 
 The plugin adds the coordinator instructions at request time, so the agent entry can stay minimal.
 
@@ -197,8 +206,14 @@ swarm({
 | `read_board` | Read board messages or inspect your own state | `since?`, `limit?`, `seqs?`, `channel?`, `status?` |
 | `swarm_wait` | Park until a matching message arrives | `since`, `mentions_only?` |
 
-`swarm` (`action: "add"`) accepts `workspace`, `role` (`worker` or `monitor`), `n`, `tasks`, `fork`, `channels`, and
-`model`.
+`swarm` (`action: "add"`) accepts `workspace`, `role`, `n`, `tasks`, `fork`, `channels`, and `model`. Each role gets
+its own rules:
+
+| Role | Does | Reports |
+| :--- | :--- | :--- |
+| `worker` (default) | Implements exactly its brief in its owned files; lists other problems instead of fixing them | `[done]` with files changed, commit SHA (in a worktree), and each check command with its result |
+| `scout` | Read-only investigation; implements only when the coordinator asks | `[done]` with findings and units ready to spawn: `name \| goal \| owns: <files> \| done when: <check>` |
+| `monitor` | Verifies a change; runs tests, builds, and lint, but does not edit source | `[pass]` or `[fail]` with evidence |
 
 The tools are offered only to Swarm-mode sessions and to sessions that belong to a swarm (including one started with
 `/mswarm` from Build or Plan). Other sessions do not see them, so they cost no context tokens there.
@@ -252,6 +267,13 @@ committed worker changes remain available for review or merge after the worktree
 with the same name uses a numbered branch suffix instead of deleting the earlier branch. Detached `share` worktrees
 have no branch: workers are told to commit and report the SHA, and the coordinator cherry-picks it before killing the
 worker. Kill force-removes the worktree, so uncommitted changes are lost.
+
+A fresh worktree contains only tracked files. So that workers can run checks immediately, mSwarm links the root's
+installed dependency folders (`node_modules`, `.venv`, `venv`) into each new worktree, as a junction on Windows and a
+symlink elsewhere. A folder is linked only when git ignores it, so the link can never be committed. Build caches such
+as `target` or `dist` are not shared, because concurrent builds into one folder would collide. The links are shared,
+so workers are told not to install packages. The coordinator schedules a dependency change as its own unit. Links
+are removed before the worktree on cleanup, so the root's folders are never touched.
 
 The state directory is git-ignored by default in this repository; add `.opencode/mswarm/` to your own `.gitignore` if
 needed.

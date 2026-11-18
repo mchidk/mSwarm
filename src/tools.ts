@@ -44,7 +44,7 @@ type SwarmArgs = {
   model?: string;
   fork?: string;
   workspace?: "inherit" | "share" | "branch";
-  role?: "worker" | "monitor";
+  role?: "worker" | "scout" | "monitor";
   n?: number;
   tasks?: string[];
   channels?: string[];
@@ -96,8 +96,8 @@ const swarmInput = objectSchema(
     role: {
       type: "string",
       description:
-        "Worker role: worker (default) or monitor (read-only observation).",
-      enum: ["worker", "monitor"],
+        "Role: worker (default; implements its owned files), scout (read-only; investigates and reports units ready to spawn), or monitor (verifies a change without editing source).",
+      enum: ["worker", "scout", "monitor"],
     },
     n: {
       type: "integer",

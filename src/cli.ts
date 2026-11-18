@@ -405,9 +405,32 @@ function hasSwarmAgent(config: OpenCodeConfig): boolean {
   return Boolean(getSwarmAgent(config));
 }
 
+type PermissionRule = { action: string; resource: string; effect: string };
+
 /**
- * Adds the selectable "Swarm" primary agent. Existing user customizations are
- * never overwritten.
+ * Permissions for the coordinator agent. It delegates through mSwarm workers
+ * rather than the built-in subagent tool, and it never edits files itself:
+ * the same `edit` deny OpenCode's own Plan agent uses. Bash stays available
+ * for `git merge`/`cherry-pick` and acceptance checks.
+ */
+const SWARM_AGENT_PERMISSIONS: PermissionRule[] = [
+  { action: "subagent", resource: "*", effect: "deny" },
+  { action: "edit", resource: "*", effect: "deny" },
+];
+
+function isPermissionRule(value: unknown): value is PermissionRule {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as PermissionRule).action === "string" &&
+    typeof (value as PermissionRule).resource === "string"
+  );
+}
+
+/**
+ * Adds the selectable "Swarm" primary agent, or upgrades an entry this
+ * installer wrote earlier with any missing default permissions. Entries a
+ * user customized (different description) are never touched.
  */
 function ensureSwarmAgent(config: OpenCodeConfig): boolean {
   if (
@@ -417,6 +440,29 @@ function ensureSwarmAgent(config: OpenCodeConfig): boolean {
   ) {
     config.agents = {};
   }
+  const existing = getSwarmAgent(config);
+  if (existing) {
+    if (existing.description !== SWARM_AGENT_DESCRIPTION) {
+      return false;
+    }
+    const current = Array.isArray(existing.permissions)
+      ? existing.permissions
+      : [];
+    const missing = SWARM_AGENT_PERMISSIONS.filter(
+      (rule) =>
+        !current.some(
+          (candidate) =>
+            isPermissionRule(candidate) &&
+            candidate.action === rule.action &&
+            candidate.resource === rule.resource,
+        ),
+    );
+    if (missing.length === 0) {
+      return false;
+    }
+    existing.permissions = [...current, ...missing.map((rule) => ({ ...rule }))];
+    return true;
+  }
   if (config.agents[SWARM_AGENT_ID]) {
     return false;
   }
@@ -424,8 +470,7 @@ function ensureSwarmAgent(config: OpenCodeConfig): boolean {
     description: SWARM_AGENT_DESCRIPTION,
     mode: "primary",
     color: SWARM_AGENT_COLOR,
-    // The coordinator should use mSwarm workers, not the built-in subagent tool.
-    permissions: [{ action: "subagent", resource: "*", effect: "deny" }],
+    permissions: SWARM_AGENT_PERMISSIONS.map((rule) => ({ ...rule })),
   };
   return true;
 }
@@ -493,6 +538,7 @@ function cmdInstall(args: string[], cwd: string): number {
   const config = document.config;
 
   const normalized = normalizeConfig(config);
+  const hadAgent = hasSwarmAgent(config);
   const agentAdded = ensureSwarmAgent(config);
   const localTarget = resolveLocalTarget(args, cwd);
   const targetEntry = localTarget ?? PLUGIN_NAME;
@@ -526,7 +572,11 @@ function cmdInstall(args: string[], cwd: string): number {
     console.log(`Added "${targetEntry}" to ${configPath}.`);
   }
   if (agentAdded) {
-    console.log(`Added the "swarm" primary agent (select it with Shift+Tab).`);
+    console.log(
+      hadAgent
+        ? `Updated the "swarm" agent's default permissions (no subagents, no direct file edits).`
+        : `Added the "swarm" primary agent (select it with Shift+Tab).`,
+    );
   }
 
   console.log("");

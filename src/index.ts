@@ -351,7 +351,7 @@ export default Plugin.define({
           name,
           brief: buildScoutBrief(text),
           workspace: "inherit",
-          role: "worker",
+          role: "scout",
         });
         if (result.created.length === 0) {
           failure = result.failures

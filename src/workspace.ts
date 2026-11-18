@@ -20,7 +20,17 @@ export interface PreparedWorkspace {
   workspacePath: string;
   branchName?: string;
   warning?: string;
+  /** Dependency folders linked from the root into the worktree. */
+  linkedDependencies?: string[];
 }
+
+/**
+ * Git-ignored dependency folders that a fresh worktree lacks. Linking them
+ * from the root lets workers run checks immediately instead of failing or
+ * reinstalling. Build caches (`target`, `dist`) are deliberately not shared:
+ * concurrent builds into one folder would collide.
+ */
+export const DEPENDENCY_DIRS = ["node_modules", ".venv", "venv"] as const;
 
 function sanitizeSegment(value: string): string {
   const clean = value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 96);
@@ -112,7 +122,11 @@ export class WorkspaceManager {
           worktreePath,
           "HEAD",
         ]);
-        return { workspacePath: worktreePath, branchName };
+        return {
+          workspacePath: worktreePath,
+          branchName,
+          ...(await this.linkDependencies(rootDir, worktreePath)),
+        };
       } catch (error) {
         return {
           workspacePath: rootDir,
@@ -130,7 +144,10 @@ export class WorkspaceManager {
         worktreePath,
         "HEAD",
       ]);
-      return { workspacePath: worktreePath };
+      return {
+        workspacePath: worktreePath,
+        ...(await this.linkDependencies(rootDir, worktreePath)),
+      };
     } catch (error) {
       return {
         workspacePath: rootDir,
@@ -167,10 +184,63 @@ export class WorkspaceManager {
     }
   }
 
+  /**
+   * Links git-ignored dependency folders from the root into a new worktree.
+   * A folder is linked only when the worktree ignores it, so the link can
+   * never be committed. Junctions on Windows need no admin rights.
+   */
+  private async linkDependencies(
+    rootDir: string,
+    worktreePath: string,
+  ): Promise<{ linkedDependencies?: string[] }> {
+    const linked: string[] = [];
+    for (const name of DEPENDENCY_DIRS) {
+      const source = path.join(rootDir, name);
+      const target = path.join(worktreePath, name);
+      try {
+        if (!fs.statSync(source).isDirectory() || fs.existsSync(target)) {
+          continue;
+        }
+        // Exit code 0 means ignored; anything else throws. The trailing
+        // slash matters: the folder does not exist in the worktree yet, so
+        // without it a directory-only pattern like `node_modules/` misses.
+        await runGit(worktreePath, ["check-ignore", "-q", `${name}/`]);
+        fs.symlinkSync(
+          path.resolve(source),
+          target,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        linked.push(name);
+      } catch {
+        // Missing, not ignored, or not linkable: the worker installs instead.
+      }
+    }
+    return linked.length > 0 ? { linkedDependencies: linked } : {};
+  }
+
+  /**
+   * Removes dependency links before the worktree itself. `git worktree
+   * remove` leaves the directory behind when it contains a junction, and
+   * unlinking first guarantees the shared root folder is never traversed.
+   */
+  private unlinkDependencies(workspacePath: string): void {
+    for (const name of DEPENDENCY_DIRS) {
+      const target = path.join(workspacePath, name);
+      try {
+        if (fs.lstatSync(target).isSymbolicLink()) {
+          fs.unlinkSync(target);
+        }
+      } catch {
+        // Not present.
+      }
+    }
+  }
+
   private async removeWorktree(
     rootDir: string,
     workspacePath: string,
   ): Promise<void> {
+    this.unlinkDependencies(workspacePath);
     try {
       await runGit(rootDir, ["worktree", "remove", "--force", workspacePath]);
     } catch {
